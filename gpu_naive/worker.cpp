@@ -77,41 +77,7 @@ int main(void) {
     int* d_output;
     int* voxels;
 
-
-    // CASO SEQUENZIALE
-
-    
-    // inizializzo spazio di rendering voxel
-    // vettore lineare di traslazioni (X * Y * Z)
-
-    std::vector<glm::vec3> voxelTranslations;
-    voxelTranslations.reserve(NUM_TOT_VOXELS);
-
-    // popolamento array 
-    for (int x = 0; x < NUM_VOXELS_X; ++x)
-    {
-        for (int y = 0; y < NUM_VOXELS_Y; ++y)
-        {
-            for (int z = 0; z < NUM_VOXELS_Z; ++z)
-            {
-                // centro la griglia nell'angolo in basso a sinistra corrispondente al primo voxel
-                glm::vec3 translation(
-                    x * DIM_VOXEL + DIM_VOXEL / 2.0f,
-                    y * DIM_VOXEL + DIM_VOXEL / 2.0f,
-                    z * DIM_VOXEL + DIM_VOXEL / 2.0f
-                );
-
-                voxelTranslations.push_back(translation);
-            }
-        }
-    }
-
-    // per applicare la traslazione : gl_Position = projection * view * vec4(worldPos, 1.0);
-
-
-    // -------------------------------------
-
-    // CASO PARALLELO
+    // -------------------------------- SET TRASLATION VECTORS --------------------------------
 
     // creo buffer openGL per interop con CUDA
 
@@ -163,7 +129,7 @@ int main(void) {
     cudaGraphicsUnmapResources(1, &cudaResource, 0);
 
 
-    // -------------------------------------
+    // -----------------------------------------------------------------------------------------------------
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {

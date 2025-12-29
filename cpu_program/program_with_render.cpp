@@ -61,6 +61,14 @@ typedef struct {
 } VoxelIndices;
 
 
+
+int compare_names(const void* a, const void* b) {
+    const char* name_a = *(const char**)a;
+    const char* name_b = *(const char**)b;
+    return strcmp(name_a, name_b);
+}
+
+
 int calculate_num_points(FILE* file) {
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
@@ -271,20 +279,41 @@ int main(void) {
             voxels[i][j] = (int*) calloc(NUM_VOXELS_Z, sizeof(int)); // allocates memory and writes all bytes to 0
     }
 
-    DIR* dir = opendir(DIRNAME);
+    // APERTURA CARTELLA, FETCH NOME FILES E SORT
+    DIR* dir = opendir(DIR_NAME);
     if (dir == NULL) {
-        printf("Errore: cartella '%s' non trovata\n", DIRNAME);
+        printf("Errore: cartella '%s' non trovata\n", DIR_NAME);
         return 1;
     }
+
+    // Fetch all file names and sort them
+    struct dirent* entry;
+    char* file_names[10000];
+    int file_count = 0;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+        file_names[file_count] = strdup(entry->d_name);
+        file_count++;
+    }
+    closedir(dir);
+
+    qsort(file_names, file_count, sizeof(char*), compare_names);
+
+    // ELABORAZIONE FRAME PER FRAME ED INVIO PUNTI
+    //per ogni frame
+    char path_to_current_frame[512];
+    FILE* current_frame;
     
     // FOR EACH FRAME VOXELIZE THE POINT CLOUD
     char path_to_current_frame[512];
     struct dirent* entry;
     FILE* current_frame;
+    char* fname;
     float point[FIELDS_PER_POINT];
-    int i = 0;
+    int num_frame = 0, num_points;
     float lastFrameTime = glfwGetTime();
-    int num_points;
+
     do {
         //--------------------CHECK IF IT'S TIME TO UPDATE---------------------------
         float currentTime = glfwGetTime();
@@ -298,14 +327,11 @@ int main(void) {
         // ----------------------------UPDATE VOXEL DATA----------------------------
         if (time_to_advance_frame) {
             //get the new dir entry
-            entry = readdir(dir);
-            if (entry == NULL) {
+            if (num_frame >= file_count) {
                 break;
             }
-            // skip cartelle . e ..
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-                continue;
-            sprintf(path_to_current_frame, "%s/%s", DIRNAME, entry->d_name);
+            fname = file_names[num_frame];
+            sprintf(path_to_current_frame, "%s/%s", DIRNAME, fname);
             // caricamento dati in memoria
             current_frame = fopen(path_to_current_frame, "rb");
             if (current_frame == NULL) {
