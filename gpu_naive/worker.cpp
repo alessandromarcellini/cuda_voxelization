@@ -14,6 +14,8 @@
 }
 
 
+
+
 __global__ void voxelization(float* d_input, int* d_output) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_points) return;
@@ -47,8 +49,22 @@ int main(void) {
     socklen_t addr_len = sizeof(addr);
     Point* curr_points, d_input;
     int* d_output;
-
     int* voxels;
+
+
+    // inizializzo spazio di rendering voxel
+
+
+
+
+
+
+
+
+
+    // -------------------------------------
+
+
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
