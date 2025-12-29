@@ -16,6 +16,7 @@ GLFWwindow* window;
 #include <glm/glm.hpp>
 using namespace glm;
 #include <glm/gtc/matrix_transform.hpp>
+#include <vector>
 
 #include "common/shader.hpp"
 
@@ -36,9 +37,11 @@ using namespace glm;
 #define NUM_VOXELS_Y ((int)((MAX_Y - MIN_Y)/DIM_VOXEL))
 #define NUM_VOXELS_Z ((int)((MAX_Z - MIN_Z)/DIM_VOXEL))
 
+#define NUM_TOT_VOXELS NUM_VOXELS_X * NUM_VOXELS_Y * NUM_VOXELS_Z
+
 #define DIRNAME "../new_dataset"
 
-#define FRAMEDURATION 0.1f // 10 FPS
+#define FRAMEDURATION 1.0f // 10 FPS
 
 #define true 1
 #define false 0
@@ -223,7 +226,7 @@ int main(void) {
 	// Modify camera position
 	glm::mat4 Projection = glm::perspective(glm::radians(45.0f), float(width)/float(height), 0.1f, 100.0f);
 	glm::mat4 View       = glm::lookAt(
-								glm::vec3(0, 5, 10), // Camera position
+								glm::vec3(0, 5, 20), // Camera position
 								glm::vec3(0,0,0), // Look at origin
 								glm::vec3(0,1,0)  // Head is up
 						);
@@ -231,12 +234,41 @@ int main(void) {
 	glm::mat4 MVP        = Projection * View * Model;
 
 
-    // --------------------------SETUP VOXELS MATRIX--------------------------
-    int ***voxels = (int ***) malloc(NUM_VOXELS_X * sizeof(int**));
+    // --------------------------SETUP TRANSLATION VECTORS--------------------
+    // inizializzo spazio di rendering voxel
+    // vettore lineare di traslazioni (X * Y * Z)
+
+    glm::vec3 ***voxelTranslations = (glm::vec3***)malloc(NUM_VOXELS_X * sizeof(glm::vec3**));
     for(int i=0; i<NUM_VOXELS_X; i++) {
-        voxels[i] = (int **) malloc(NUM_VOXELS_Y * sizeof(int*));
+        voxelTranslations[i] = (glm::vec3**) malloc(NUM_VOXELS_Y * sizeof(glm::vec3*));
+        for(int j=0; j < NUM_VOXELS_Y; j++)
+            voxelTranslations[i][j] = (glm::vec3*) calloc(NUM_VOXELS_Z, sizeof(glm::vec3)); // allocates memory and writes all bytes to 0
+    }
+
+    // popolamento array
+    for (int x = 0; x < NUM_VOXELS_X; ++x) {
+        for (int y = 0; y < NUM_VOXELS_Y; ++y) {
+            for (int z = 0; z < NUM_VOXELS_Z; ++z) {
+                // centro la griglia nell'angolo in basso a sinistra corrispondente al primo voxel
+                glm::vec3 translation(
+                    x * DIM_VOXEL + DIM_VOXEL / 2.0f,
+                    y * DIM_VOXEL + DIM_VOXEL / 2.0f,
+                    z * DIM_VOXEL + DIM_VOXEL / 2.0f
+                );
+
+                voxelTranslations[x][y][z] = translation;
+            }
+        }
+    }
+
+    // per applicare la traslazione : gl_Position = projection * view * vec4(worldPos, 1.0);
+
+    // --------------------------SETUP VOXELS MATRIX--------------------------
+    int ***voxels = (int***) malloc(NUM_VOXELS_X * sizeof(int**));
+    for(int i=0; i<NUM_VOXELS_X; i++) {
+        voxels[i] = (int**) malloc(NUM_VOXELS_Y * sizeof(int*));
         for(int j=0; j<NUM_VOXELS_Y; j++)
-            voxels[i][j] = (int *) calloc(NUM_VOXELS_Z, sizeof(int)); // allocates memory and writes all bytes to 0
+            voxels[i][j] = (int*) calloc(NUM_VOXELS_Z, sizeof(int)); // allocates memory and writes all bytes to 0
     }
 
     DIR* dir = opendir(DIRNAME);
@@ -329,7 +361,20 @@ int main(void) {
             1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0
         );
 
-        //render current voxels
+        //---------------------render current voxels-------------------------------
+        for (int i = 0; i < NUM_VOXELS_X; i++) {
+            for (int j = 0; j < NUM_VOXELS_Y; j++) {
+                for (int k = 0; k < NUM_VOXELS_Z; k++) {
+                    if (voxels[i][j][k] > 0) {
+                        //render it
+                        glm::mat4 Model1 = glm::translate(glm::mat4(1.0f), voxelTranslations[i][j][k]);
+                        glm::mat4 MVP1 = Projection * View * Model1;
+                        glUniformMatrix4fv(MatrixID, 1, GL_FALSE, &MVP1[0][0]);
+                        glDrawArrays(GL_TRIANGLES, 0, 12*3);
+                    }
+                }
+            }
+        }
 
         // --- CUBE EXAMPLE: LEFT TRANSLATED ---
         // glm::mat4 Model1 = glm::translate(glm::mat4(1.0f), glm::vec3(-2.0f, 1.0f, 0.0f));
