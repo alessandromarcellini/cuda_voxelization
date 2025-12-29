@@ -98,7 +98,7 @@ int main(void) {
         // Lettura
         while (fread(point, sizeof(float), FIELDS_PER_POINT, current_frame) == FIELDS_PER_POINT) {
             // trova il voxel in cui è
-            VoxelIndices curr_voxel_indices = calculate_voxel_indices(point)
+            VoxelIndices curr_voxel_indices = calculate_voxel_indices(point);
 
 
             if(curr_voxel_indices.i < 0 || curr_voxel_indices.i >= NUM_VOXELS_X ||

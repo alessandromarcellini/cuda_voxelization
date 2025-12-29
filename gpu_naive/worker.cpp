@@ -15,6 +15,32 @@
 
 
 
+__global__ void vectorGeneration(float4* d_output,
+    int NUM_VOXELS_X, int NUM_VOXELS_Y, int NUM_VOXELS_Z,
+    float DIM_VOXEL) {
+
+    x = blockIdx.x * blockDim.x + threadIdx.x;
+    y = blockIdx.y * blockDim.y + threadIdx.y;
+    z = blockIdx.z * blockDim.z + threadIdx.z;
+    nx = gridDim.x * blockDim.x;
+    ny = gridDim.y * blockDim.y;
+    int idx = z * (nx * ny) + y * nx + x;
+
+    if (x >= NUM_VOXELS_X || y >= NUM_VOXELS_Y || z >= NUM_VOXELS_Z)
+        return;
+
+    float4 vector = {
+        x * DIM_VOXEL + DIM_VOXEL / 2.0f,
+        y * DIM_VOXEL + DIM_VOXEL / 2.0f,
+        z * DIM_VOXEL + DIM_VOXEL / 2.0f,
+        1.0f
+    };
+
+    d_output[idx] = vector;
+
+}
+
+
 
 __global__ void voxelization(float* d_input, int* d_output) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -52,19 +78,92 @@ int main(void) {
     int* voxels;
 
 
+    // CASO SEQUENZIALE
+
+    
     // inizializzo spazio di rendering voxel
+    // vettore lineare di traslazioni (X * Y * Z)
 
+    std::vector<glm::vec3> voxelTranslations;
+    voxelTranslations.reserve(NUM_TOT_VOXELS);
 
+    // popolamento array 
+    for (int x = 0; x < NUM_VOXELS_X; ++x)
+    {
+        for (int y = 0; y < NUM_VOXELS_Y; ++y)
+        {
+            for (int z = 0; z < NUM_VOXELS_Z; ++z)
+            {
+                // centro la griglia nell'angolo in basso a sinistra corrispondente al primo voxel
+                glm::vec3 translation(
+                    x * DIM_VOXEL + DIM_VOXEL / 2.0f,
+                    y * DIM_VOXEL + DIM_VOXEL / 2.0f,
+                    z * DIM_VOXEL + DIM_VOXEL / 2.0f
+                );
 
+                voxelTranslations.push_back(translation);
+            }
+        }
+    }
 
-
-
-
+    // per applicare la traslazione : gl_Position = projection * view * vec4(worldPos, 1.0);
 
 
     // -------------------------------------
 
+    // CASO PARALLELO
 
+    // creo buffer openGL per interop con CUDA
+
+    GLuint voxelOffsetBuffer; // variabile per id buffer openGL
+    glGenBuffers(1, &voxelOffsetBuffer); // creo ill buffer e gli assegno un id
+    glBindBuffer(GL_ARRAY_BUFFER, voxelOffsetBuffer); // definisco il tipo di buffer
+
+    glBufferData(GL_ARRAY_BUFFER, // alloco memoria per il buffer
+                NUM_TOT_VOXELS * sizeof(float4),
+                nullptr,            // nessun dato iniziale
+                GL_STATIC_DRAW); // buffer raramente modificato
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    // registro il buffer su CUDA
+
+    cudaGraphicsResource* cudaResource;
+    cudaGraphicsGLRegisterBuffer(
+        &cudaResource, // indirizzo variabile che contiene l'handle del buffer
+        voxelOffsetBuffer, // id del buffer openGL
+        cudaGraphicsRegisterFlagsNone
+    );
+
+    // mappo il buffer
+
+    cudaGraphicsMapResources(1, &cudaResource, 0); // lock del buffer su CUDA
+
+    float4* d_output = nullptr;
+    size_t size = 0;
+
+    cudaGraphicsResourceGetMappedPointer(
+        (void**)&d_output, // il puntatore device (GPU) reale alla memoria del buffer mappato
+        &size,
+        cudaResource
+    );
+
+
+    // lancio kernel
+    dim3 blockSize(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+    dim3 gridSize(                           
+    (NUM_VOXELS_X + BLOCK_SIZE - 1) / BLOCK_SIZE,           
+    (NUM_VOXELS_Y + BLOCK_SIZE - 1) / BLOCK_SIZE,          
+    (NUM_VOXELS_Z + BLOCK_SIZE - 1) / BLOCK_SIZE        
+    );
+
+    vectorGeneration <<<gridSize, blockSize>>>(d_output, NUM_VOXELS_X, NUM_VOXELS_Y, NUM_VOXELS_Z, DIM_VOXEL);
+    
+    // rilascio risorse CUDA, d'ora in poi lo spazio di memoria diventa un normale buffer openGL
+    cudaGraphicsUnmapResources(1, &cudaResource, 0);
+
+
+    // -------------------------------------
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
@@ -115,7 +214,7 @@ int main(void) {
 
         // LANCIO KERNEL
         dim3 blockSize(BLOCK_SIZE);
-        dim3 gridSize((num_points + threads - 1) / BLOCK_SIZE);
+        dim3 gridSize((num_points + blockSize - 1) / BLOCK_SIZE);
         voxelization <<<gridSize, blockSize>>>(d_input, d_output);
 
         //Copia D2H risultati

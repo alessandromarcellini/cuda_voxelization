@@ -4,6 +4,7 @@ typedef struct {
   float z;
 } Point;
 
+
 #include <stdio.h>
 #include <dirent.h>
 #include <unistd.h>
