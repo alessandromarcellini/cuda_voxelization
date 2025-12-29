@@ -22,6 +22,8 @@
 #define NUM_VOXELS_Y ((int)((MAX_Y - MIN_Y)/DIM_VOXEL))
 #define NUM_VOXELS_Z ((int)((MAX_Z - MIN_Z)/DIM_VOXEL))
 
+#define DIRNAME "../new_dataset"
+
 
 
 typedef struct {
@@ -30,25 +32,45 @@ typedef struct {
   float z;
 } Point;
 
+typedef struct {
+  int i;
+  int j;
+  int k;
+} VoxelIndices;
+
+
+int calculate_num_points(FILE* file) {
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    return file_size / (FIELDS_PER_POINT * sizeof(float));
+}
+
+VoxelIndices calculate_voxel_indices(float* point) {
+    VoxelIndices result;
+    result.i = (int)floor((point[0] - MIN_X) / DIM_VOXEL);
+    result.j = (int)floor((point[1] - MIN_Y) / DIM_VOXEL);
+    result.k = (int)floor((point[2] - MIN_Z) / DIM_VOXEL);
+    return result;
+}
+
 
 int main(void) {
-    // Point* points;
-    int ***voxels = malloc(NUM_VOXELS_X * sizeof(int**));
+    // SETUP VOXELS MATRIX
+    int ***voxels = (int ***) malloc(NUM_VOXELS_X * sizeof(int**));
     for(int i=0; i<NUM_VOXELS_X; i++) {
-        voxels[i] = malloc(NUM_VOXELS_Y * sizeof(int*));
+        voxels[i] = (int **) malloc(NUM_VOXELS_Y * sizeof(int*));
         for(int j=0; j<NUM_VOXELS_Y; j++)
-            voxels[i][j] = calloc(NUM_VOXELS_Z, sizeof(int));
+            voxels[i][j] = (int *) calloc(NUM_VOXELS_Z, sizeof(int)); // allocates memory and writes all bytes to 0
     }
-    
-    char* dir_name = "new_dataset";
 
-    DIR* dir = opendir(dir_name);
+    DIR* dir = opendir(DIRNAME);
     if (dir == NULL) {
-        printf("Errore: cartella '%s' non trovata\n", dir_name);
+        printf("Errore: cartella '%s' non trovata\n", DIRNAME);
         return 1;
     }
     
-    //per ogni frame
+    // PER OGNI FRAME FAI LE COMPUTAZIONI NECESSARIE
     char path_to_current_frame[512];
     struct dirent* entry;
     FILE* current_frame;
@@ -60,9 +82,10 @@ int main(void) {
     int curr_voxel_z;
 
     while ((entry = readdir(dir)) != NULL) {
+        // skip cartelle . e ..
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
-        sprintf(path_to_current_frame, "%s/%s", dir_name, entry->d_name);
+        sprintf(path_to_current_frame, "%s/%s", DIRNAME, entry->d_name);
 
         // caricamento dati in memoria
         current_frame = fopen(path_to_current_frame, "rb");
@@ -70,39 +93,22 @@ int main(void) {
             perror("Errore apertura file input");
             continue;
         }
-        //calcolo numero punti
-        fseek(current_frame, 0, SEEK_END);
-        long file_size = ftell(current_frame);
-        fseek(current_frame, 0, SEEK_SET);
-        int num_points = file_size / (FIELDS_PER_POINT * sizeof(float));
-
-        //malloc per allocate array di punti
-        // points = (Point*)malloc(num_points * sizeof(Point));
-        // if (points == NULL) {
-        //     perror("Errore allocazione memoria");
-        //     fclose(current_frame);
-        //     continue;
-        // }
+        int num_points = calculate_num_points(current_frame);
 
         // Lettura
         while (fread(point, sizeof(float), FIELDS_PER_POINT, current_frame) == FIELDS_PER_POINT) {
-                // points[i].x = point[0];
-                // points[i].y = point[1];
-                // points[i].z = point[2];
+            // trova il voxel in cui è
+            VoxelIndices curr_voxel_indices = calculate_voxel_indices(point)
 
-                // trova il voxel in cui è
-                curr_voxel_x = (int)floor((point[0] - MIN_X) / DIM_VOXEL);
-                curr_voxel_y = (int)floor((point[1] - MIN_Y) / DIM_VOXEL);
-                curr_voxel_z = (int)floor((point[2] - MIN_Z) / DIM_VOXEL);
 
-                if(curr_voxel_x < 0 || curr_voxel_x >= NUM_VOXELS_X ||
-                    curr_voxel_y < 0 || curr_voxel_y >= NUM_VOXELS_Y ||
-                    curr_voxel_z < 0 || curr_voxel_z >= NUM_VOXELS_Z) {
-                        // punto fuori dai limiti
-                        continue;
-                }
+            if(curr_voxel_indices.i < 0 || curr_voxel_indices.i >= NUM_VOXELS_X ||
+                curr_voxel_indices.j < 0 || curr_voxel_indices.j >= NUM_VOXELS_Y ||
+                curr_voxel_indices.k < 0 || curr_voxel_indices.k >= NUM_VOXELS_Z) {
+                    // punto fuori dai limiti
+                    continue;
+            }
 
-                voxels[curr_voxel_x][curr_voxel_y][curr_voxel_z]++;
+            voxels[curr_voxel_indices.i][curr_voxel_indices.j][curr_voxel_indices.k]++;
             }
             fclose(current_frame);
 
