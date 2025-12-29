@@ -22,14 +22,12 @@ typedef struct {
 
 #define NUM_TOT_VOXELS NUM_VOXELS_X * NUM_VOXELS_Y * NUM_VOXELS_Z
 
-#define MAX_X 34
-#define MIN_X -34
-
-#define MAX_Y 22
-#define MIN_Y -22
-
-#define MAX_Z 3
-#define MIN_Z -3
+#define MAX_X 300 //34
+#define MAX_Y 200 // 22
+#define MAX_Z 100 // 3
+#define MIN_X -300 //-34
+#define MIN_Y -200 // -22
+#define MIN_Z -100 // -3
 
 #define DIR_NAME "../new_dataset"
 

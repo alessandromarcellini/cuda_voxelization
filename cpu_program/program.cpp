@@ -7,14 +7,12 @@
 
 #define FIELDS_PER_POINT 4
 
-#define MAX_X 34
-#define MIN_X -34
-
-#define MAX_Y 22
-#define MIN_Y -22
-
-#define MAX_Z 3
-#define MIN_Z -3
+#define MAX_X 300 //34
+#define MAX_Y 200 // 22
+#define MAX_Z 100 // 3
+#define MIN_X -300 //-34
+#define MIN_Y -200 // -22
+#define MIN_Z -100 // -3
 
 #define DIM_VOXEL 0.1
 

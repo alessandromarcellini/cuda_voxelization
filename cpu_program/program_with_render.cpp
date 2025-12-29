@@ -22,14 +22,15 @@ using namespace glm;
 
 #define FIELDS_PER_POINT 4
 
-#define MAX_X 34
-#define MIN_X -34
+#define MAX_X 50 //34
+#define MAX_Y 50 // 22
+#define MAX_Z 10 // 3
+#define MIN_X -50 //-34
+#define MIN_Y -50 // -22
+#define MIN_Z -10 // -3
 
-#define MAX_Y 22
-#define MIN_Y -22
+#define MIN_POINTS_IN_VOXEL_TO_RENDER 0
 
-#define MAX_Z 3
-#define MIN_Z -3
 
 #define DIM_VOXEL 0.1
 
@@ -102,7 +103,7 @@ int main(void) {
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
 	// Open a window and create its OpenGL context
-	window = glfwCreateWindow( 1024, 768, "Tutorial 02 - Cube", NULL, NULL);
+	window = glfwCreateWindow( 1024, 768, "CPU Voxelization", NULL, NULL);
 	if( window == NULL ){
 		fprintf( stderr, "Failed to open GLFW window. If you have an Intel GPU, they are not 3.3 compatible. Try the 2.1 version of the tutorials.\n" );
 		getchar();
@@ -181,49 +182,78 @@ int main(void) {
 
 	// Vertices colors
 	// One color for each vertex
-	static const GLfloat g_color_buffer_data[] = {
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f,
-		1.0f,  1.0f,  1.0f
-	};
+    float faceGray[6] = {
+        0.85f, // faccia 0 (chiara)
+        0.70f,
+        0.55f,
+        0.40f,
+        0.65f,
+        0.50f  // faccia 5 (più scura)
+    };
+
+    std::vector<GLfloat> g_color_buffer_data;
+    g_color_buffer_data.reserve(36 * 3); // 36 vertici, RGB
+    for (int face = 0; face < 6; face++) {
+        float gray = faceGray[face];
+
+        // ogni faccia ha 6 vertici (2 triangoli)
+        for (int v = 0; v < 6; v++) {
+            g_color_buffer_data.push_back(gray); // R
+            g_color_buffer_data.push_back(gray); // G
+            g_color_buffer_data.push_back(gray); // B
+        }
+    }
+
+
+	// static const GLfloat g_color_buffer_data[] = {
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f,
+	// 	1.0f,  1.0f,  1.0f
+	// };
 
     GLuint colorbuffer;
 	glGenBuffers(1, &colorbuffer);
 	glBindBuffer(GL_ARRAY_BUFFER, colorbuffer);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(g_color_buffer_data), g_color_buffer_data, GL_STATIC_DRAW);
+	// glBufferData(GL_ARRAY_BUFFER, sizeof(g_color_buffer_data), g_color_buffer_data, GL_STATIC_DRAW);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        g_color_buffer_data.size() * sizeof(float),
+        g_color_buffer_data.data(),
+        GL_STATIC_DRAW
+    );
 
 	GLuint vertexbuffer;
 	glGenBuffers(1, &vertexbuffer);
@@ -232,12 +262,31 @@ int main(void) {
 
 
 	// Modify camera position
-	glm::mat4 Projection = glm::perspective(glm::radians(45.0f), float(width)/float(height), 0.1f, 100.0f);
-	glm::mat4 View       = glm::lookAt(
-								glm::vec3(0, 5, 20), // Camera position
-								glm::vec3(0,0,0), // Look at origin
-								glm::vec3(0,1,0)  // Head is up
-						);
+    glm::mat4 Projection = glm::perspective(
+        glm::radians(70.0f),
+        float(width) / float(height),
+        0.1f,
+        200.0f
+    );
+
+    // Camera al centro della scena
+    glm::vec3 cameraPos(
+        (MIN_X + MAX_X / 2) * 0.5f,// 0
+        (MIN_Y + MAX_Y) * 0.5f,   // 0
+        1.0f                      // altezza camera
+    );
+
+    // Direzione "avanti" (asse X positivo)
+    glm::vec3 forward(1.0f, 0.0f, 0.0f);
+
+    // Asse verticale (Z è l'alto)
+    glm::vec3 up(0.0f, 0.0f, 1.0f);
+
+    glm::mat4 View = glm::lookAt(
+        cameraPos,
+        cameraPos + forward,
+        up
+    );
 	glm::mat4 Model      = glm::mat4(1.0f);
 	glm::mat4 MVP        = Projection * View * Model;
 
@@ -259,9 +308,9 @@ int main(void) {
             for (int z = 0; z < NUM_VOXELS_Z; ++z) {
                 // centro la griglia nell'angolo in basso a sinistra corrispondente al primo voxel
                 glm::vec3 translation(
-                    x * DIM_VOXEL + DIM_VOXEL / 2.0f,
-                    y * DIM_VOXEL + DIM_VOXEL / 2.0f,
-                    z * DIM_VOXEL + DIM_VOXEL / 2.0f
+                    (x * DIM_VOXEL + DIM_VOXEL / 2.0f) + MIN_X,
+                    (y * DIM_VOXEL + DIM_VOXEL / 2.0f) + MIN_Y,
+                    (z * DIM_VOXEL + DIM_VOXEL / 2.0f) + MIN_Z
                 );
 
                 voxelTranslations[x][y][z] = translation;
@@ -280,9 +329,9 @@ int main(void) {
     }
 
     // APERTURA CARTELLA, FETCH NOME FILES E SORT
-    DIR* dir = opendir(DIR_NAME);
+    DIR* dir = opendir(DIRNAME);
     if (dir == NULL) {
-        printf("Errore: cartella '%s' non trovata\n", DIR_NAME);
+        printf("Errore: cartella '%s' non trovata\n", DIRNAME);
         return 1;
     }
 
@@ -306,9 +355,6 @@ int main(void) {
     FILE* current_frame;
     
     // FOR EACH FRAME VOXELIZE THE POINT CLOUD
-    char path_to_current_frame[512];
-    struct dirent* entry;
-    FILE* current_frame;
     char* fname;
     float point[FIELDS_PER_POINT];
     int num_frame = 0, num_points;
@@ -361,7 +407,8 @@ int main(void) {
                 voxels[curr_voxel_indices.i][curr_voxel_indices.j][curr_voxel_indices.k]++;
             }
             fclose(current_frame);
-            printf("FINITO FILE %s\n", entry->d_name);
+            printf("FINITO FILE %s\n", fname);
+            num_frame++;
         }
 
         //---------------------------- RENDER ----------------------------
@@ -391,9 +438,10 @@ int main(void) {
         for (int i = 0; i < NUM_VOXELS_X; i++) {
             for (int j = 0; j < NUM_VOXELS_Y; j++) {
                 for (int k = 0; k < NUM_VOXELS_Z; k++) {
-                    if (voxels[i][j][k] > 0) {
+                    if (voxels[i][j][k] > MIN_POINTS_IN_VOXEL_TO_RENDER) {
                         //render it
                         glm::mat4 Model1 = glm::translate(glm::mat4(1.0f), voxelTranslations[i][j][k]);
+                        Model1 = glm::scale(Model1, glm::vec3(DIM_VOXEL / 2.0f));
                         glm::mat4 MVP1 = Projection * View * Model1;
                         glUniformMatrix4fv(MatrixID, 1, GL_FALSE, &MVP1[0][0]);
                         glDrawArrays(GL_TRIANGLES, 0, 12*3);
