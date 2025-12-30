@@ -1,5 +1,12 @@
+#include <stdio.h>
+#include <dirent.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <arpa/inet.h>
 
-#include "params.h"
+#include "params.hpp"
 
 int compare_names(const void* a, const void* b) {
     const char* name_a = *(const char**)a;
@@ -29,9 +36,9 @@ int main(void) {
 
 
     // APERTURA CARTELLA, FETCH NOME FILES E SORT
-    DIR* dir = opendir(DIR_NAME);
+    DIR* dir = opendir(DIRNAME);
     if (dir == NULL) {
-        printf("Errore: cartella '%s' non trovata\n", DIR_NAME);
+        printf("Errore: cartella '%s' non trovata\n", DIRNAME);
         return 1;
     }
 
@@ -58,7 +65,7 @@ int main(void) {
     int i = 0;
 
     for (int f = 0; f < file_count; f++) {
-        sprintf(path_to_current_frame, "%s/%s", DIR_NAME, file_names[f]);
+        sprintf(path_to_current_frame, "%s/%s", DIRNAME, file_names[f]);
 
         // caricamento dati in memoria
         current_frame = fopen(path_to_current_frame, "rb");

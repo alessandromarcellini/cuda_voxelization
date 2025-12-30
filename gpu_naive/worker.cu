@@ -6,13 +6,13 @@
 #include <math.h>
 #include <arpa/inet.h>
 
-
+#include "opengl.hpp"
 #include "params.hpp"
 #define PORT 53456
 
 #define THREAD_BLOCK_SIZE 256
 
-#define CHECK(call){
+/*#define CHECK(call){
     const cudaError_t error = call;
         if (error != cudaSuccess){
         printf("Error: %s:%d, ", __FILE__, __LINE__);
@@ -20,15 +20,15 @@
         cudaGetErrorString(error));
         exit(1);
     }
-}
+}*/
 
-__global__ void vectorGeneration(float4* d_output) {
+__global__ void vectorGeneration(float4* d_vectors) {
 
-    x = blockIdx.x * blockDim.x + threadIdx.x;
-    y = blockIdx.y * blockDim.y + threadIdx.y;
-    z = blockIdx.z * blockDim.z + threadIdx.z;
-    nx = gridDim.x * blockDim.x;
-    ny = gridDim.y * blockDim.y;
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int z = blockIdx.z * blockDim.z + threadIdx.z;
+    int nx = gridDim.x * blockDim.x;
+    int ny = gridDim.y * blockDim.y;
     int idx = z * (nx * ny) + y * nx + x;
 
     if (x >= NUM_VOXELS_X || y >= NUM_VOXELS_Y || z >= NUM_VOXELS_Z)
@@ -41,21 +41,20 @@ __global__ void vectorGeneration(float4* d_output) {
         1.0f
     };
 
-    d_output[idx] = vector;
+    d_vectors[idx] = vector;
 
 }
 
-__global__ void voxelization(float* d_input, int* d_output) {
+__global__ void voxelization(Point* d_input, int* d_output, int num_points) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_points) return;
 
-    Point p = points[idx];
-
+    Point point = d_input[idx];
 
     // voxelize this point
-    int curr_voxel_x = (int)floor((point[0] - MIN_X) / DIM_VOXEL);
-    int curr_voxel_y = (int)floor((point[1] - MIN_Y) / DIM_VOXEL);
-    int curr_voxel_z = (int)floor((point[2] - MIN_Z) / DIM_VOXEL);
+    int curr_voxel_x = (int)floor((point.x - MIN_X) / DIM_VOXEL);
+    int curr_voxel_y = (int)floor((point.y - MIN_Y) / DIM_VOXEL);
+    int curr_voxel_z = (int)floor((point.z - MIN_Z) / DIM_VOXEL);
     
     if(curr_voxel_x < 0 || curr_voxel_x >= NUM_VOXELS_X ||
         curr_voxel_y < 0 || curr_voxel_y >= NUM_VOXELS_Y ||
@@ -65,7 +64,7 @@ __global__ void voxelization(float* d_input, int* d_output) {
     }
 
     // calcolo indice array lineare voxel
-    int voxel_idx = (z * grid_dim_y + y) * grid_dim_x + x; curr_voxel_z * (NUM_VOXELS_X* NUM_VOXELS_Y) + curr_voxel_y * NUM_VOXELS_X + curr_voxel_x;
+    int voxel_idx = curr_voxel_z * (NUM_VOXELS_X* NUM_VOXELS_Y) + curr_voxel_y * NUM_VOXELS_X + curr_voxel_x;
     
     atomicAdd(&d_output[voxel_idx], 1); 
 }
@@ -279,8 +278,8 @@ int main(void) {
     // lancio kernel
 
     float4 vectorTranslations[NUM_TOT_VOXELS];
-    float4* d_output;
-    CHECK(cudaMalloc(&d_output, NUM_TOT_VOXELS*sizeof(float4)));
+    float4* d_vectors;
+    cudaMalloc(&d_vectors, NUM_TOT_VOXELS*sizeof(float4));
 
     dim3 blockSize(THREAD_BLOCK_SIZE, THREAD_BLOCK_SIZE, THREAD_BLOCK_SIZE);
     dim3 gridSize(                           
@@ -289,9 +288,9 @@ int main(void) {
         (NUM_VOXELS_Z + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE        
     );
 
-    vectorGeneration <<<gridSize, blockSize>>>(d_output);
-    CHECK(cudaMemcpy(d_output, vectorTranslations, NUM_TOT_VOXELS * sizeof(float4), cudaMemcpyDeviceToHost));
-    cudaFree(d_output);
+    vectorGeneration <<<gridSize, blockSize>>>(d_vectors);
+    cudaMemcpy(d_vectors, vectorTranslations, NUM_TOT_VOXELS * sizeof(float4), cudaMemcpyDeviceToHost);
+    cudaFree(d_vectors);
     // rilascio risorse CUDA, d'ora in poi lo spazio di memoria diventa un normale buffer openGL
     //cudaGraphicsUnmapResources(1, &cudaResource, 0);
 
@@ -322,7 +321,6 @@ int main(void) {
         exit(1);
     }
     printf("Connected with supplier.\n\n");
-    int num_points;
     int i = 0;
 
     // ------------------------FRAME BY FRAME COMPUTATIONS-----------------
@@ -334,6 +332,8 @@ int main(void) {
     bool received_num_points = false;
     int num_points_recvd = 0;
     int num_points = 0;
+    int* d_output;
+    int voxels[NUM_TOT_VOXELS];
 
     // coda di numero di punti
     // coda di punti con più punti di frame diversi
@@ -377,24 +377,24 @@ int main(void) {
             received_num_points = false;
             num_points_recvd = 0;
 
-            //
+            
 
             // -----------------------VOXELIZATION-------------------------------
             // ALLOCAZIONE PUNTI
-            CHECK(cudaMalloc(&d_input, num_points * sizeof(Point)));
-            CHECK(cudaMemcpy(d_input, curr_points, num_points * sizeof(Point), cudaMemcpyHostToDevice)); 
+            cudaMalloc(&d_input, num_points * sizeof(Point));
+            cudaMemcpy(d_input, curr_points, num_points * sizeof(Point), cudaMemcpyHostToDevice); 
             
             // ALLOCAZIONE VOXELS
-            CHECK(cudaMalloc(&d_output, NUM_TOT_VOXELS));
-            CHECK(cudaMemset(d_output, 0, NUM_TOT_VOXELS)); 
+            cudaMalloc(&d_output, NUM_TOT_VOXELS * sizeof(int));
+            cudaMemset(d_output, 0, NUM_TOT_VOXELS); 
 
             // LANCIO KERNEL
             dim3 blockSize(THREAD_BLOCK_SIZE);
-            dim3 gridSize((num_points + blockSize - 1) / THREAD_BLOCK_SIZE);
-            voxelization <<<gridSize, blockSize>>>(d_input, d_output);
+            dim3 gridSize((num_points + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE);
+            voxelization <<<gridSize, blockSize>>>(d_input, d_output, num_points);
             //Copia D2H risultati
             voxels = (int*) malloc(NUM_TOT_VOXELS * sizeof(int));
-            CHECK(cudaMemcpy(d_output, voxels, NUM_TOT_VOXELS * sizeof(int), cudaMemcpyDeviceToHost));
+            cudaMemcpy(d_output, voxels, NUM_TOT_VOXELS * sizeof(int), cudaMemcpyDeviceToHost);
             
             //cleanUP
             cudaFree(d_input);
