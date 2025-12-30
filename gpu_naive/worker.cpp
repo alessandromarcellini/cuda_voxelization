@@ -243,40 +243,45 @@ int main(void) {
 
     // Creating openGL buffer and register it with CUDA
 
-    GLuint voxelOffsetBuffer; // variabile per id buffer openGL
-    glGenBuffers(1, &voxelOffsetBuffer); // creo ill buffer e gli assegno un id
-    glBindBuffer(GL_ARRAY_BUFFER, voxelOffsetBuffer); // definisco il tipo di buffer
+    // GLuint voxelOffsetBuffer; // variabile per id buffer openGL
+    // glGenBuffers(1, &voxelOffsetBuffer); // creo il buffer e gli assegno un id
+    // glBindBuffer(GL_ARRAY_BUFFER, voxelOffsetBuffer); // definisco il tipo di buffer
 
-    glBufferData(GL_ARRAY_BUFFER, // alloco memoria per il buffer
-                NUM_TOT_VOXELS * sizeof(float4),
-                nullptr,            // nessun dato iniziale
-                GL_STATIC_DRAW); // buffer raramente modificato
+    // glBufferData(GL_ARRAY_BUFFER, // alloco memoria per il buffer
+    //             NUM_TOT_VOXELS * sizeof(float4),
+    //             nullptr,            // nessun dato iniziale
+    //             GL_STATIC_DRAW); // buffer raramente modificato
 
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    // glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-    // registro il buffer su CUDA
+    // // registro il buffer su CUDA
 
-    cudaGraphicsResource* cudaResource;
-    cudaGraphicsGLRegisterBuffer(
-        &cudaResource, // indirizzo variabile che contiene l'handle del buffer
-        voxelOffsetBuffer, // id del buffer openGL
-        cudaGraphicsRegisterFlagsNone
-    );
+    // cudaGraphicsResource* cudaResource;
+    // cudaGraphicsGLRegisterBuffer(
+    //     &cudaResource, // indirizzo variabile che contiene l'handle del buffer
+    //     voxelOffsetBuffer, // id del buffer openGL
+    //     cudaGraphicsRegisterFlagsNone
+    // );
 
-    // mappo il buffer
-    cudaGraphicsMapResources(1, &cudaResource, 0); // lock del buffer su CUDA
+    // // mappo il buffer
+    // cudaGraphicsMapResources(1, &cudaResource, 0); // lock del buffer su CUDA
 
-    float4* d_output = nullptr;
-    size_t size = 0;
+    // float4* d_output = nullptr;
+    // size_t size = 0;
 
-    cudaGraphicsResourceGetMappedPointer(
-        (void**)&d_output, // il puntatore device (GPU) reale alla memoria del buffer mappato
-        &size,
-        cudaResource
-    );
+    // cudaGraphicsResourceGetMappedPointer(
+    //     (void**)&d_output, // il puntatore device (GPU) reale alla memoria del buffer mappato
+    //     &size,
+    //     cudaResource
+    // );
 
 
     // lancio kernel
+
+    float4 vectorTranslations[NUM_TOT_VOXELS];
+    float4* d_output;
+    CHECK(cudaMalloc(&d_output, NUM_TOT_VOXELS*sizeof(float4)));
+
     dim3 blockSize(THREAD_BLOCK_SIZE, THREAD_BLOCK_SIZE, THREAD_BLOCK_SIZE);
     dim3 gridSize(                           
         (NUM_VOXELS_X + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE,           
@@ -285,9 +290,10 @@ int main(void) {
     );
 
     vectorGeneration <<<gridSize, blockSize>>>(d_output);
-    
+    CHECK(cudaMemcpy(d_output, vectorTranslations, NUM_TOT_VOXELS * sizeof(float4), cudaMemcpyDeviceToHost));
+    cudaFree(d_output);
     // rilascio risorse CUDA, d'ora in poi lo spazio di memoria diventa un normale buffer openGL
-    cudaGraphicsUnmapResources(1, &cudaResource, 0);
+    //cudaGraphicsUnmapResources(1, &cudaResource, 0);
 
 
     // --------------------------SETUP SOCKET COMMUNICATION--------------------
@@ -420,18 +426,14 @@ int main(void) {
         );
 
         //---------------------render current voxels-------------------------------
-        for (int i = 0; i < NUM_VOXELS_X; i++) {
-            for (int j = 0; j < NUM_VOXELS_Y; j++) {
-                for (int k = 0; k < NUM_VOXELS_Z; k++) {
-                    if (voxels[i][j][k] > MIN_POINTS_IN_VOXEL_TO_RENDER) {
-                        //render it
-                        glm::mat4 Model1 = glm::translate(glm::mat4(1.0f), voxelTranslationVectors[i][j][k]);
-                        Model1 = glm::scale(Model1, glm::vec3(DIM_VOXEL / 2.0f));
-                        glm::mat4 MVP1 = Projection * View * Model1;
-                        glUniformMatrix4fv(MatrixID, 1, GL_FALSE, &MVP1[0][0]);
-                        glDrawArrays(GL_TRIANGLES, 0, 12*3);
-                    }
-                }
+        for (int i = 0; i < NUM_TOT_VOXELS; i++) {
+            if (voxels[i] > MIN_POINTS_IN_VOXEL_TO_RENDER) {
+                //render it
+                glm::mat4 Model1 = glm::translate(glm::mat4(1.0f), vectorTranslations[i]);
+                Model1 = glm::scale(Model1, glm::vec3(DIM_VOXEL / 2.0f));
+                glm::mat4 MVP1 = Projection * View * Model1;
+                glUniformMatrix4fv(MatrixID, 1, GL_FALSE, &MVP1[0][0]);
+                glDrawArrays(GL_TRIANGLES, 0, 12*3);
             }
         }
 
@@ -456,59 +458,9 @@ int main(void) {
 
     free(voxels);
     free(voxelTranslationVectors);
-
-	return 0;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    //-------------------------------------------------------OLD CODE----------------------------------------------------------
-    for(;;) {
-        recv(client_fd, &num_points, sizeof(int), 0);
-        // MALLOC
-        curr_points = (Point*) malloc(num_points * sizeof(Point));
-        printf("RICEZIONE DI %i PUNTI DA SOCKET:\n\n", num_points);
-
-        // RICEZIONE PUNTI
-        for (i = 0; i < num_points; i++) {
-            recv(client_fd, &curr_points[i], sizeof(Point), 0);
-            printf("Received Point: x=%f, y=%f, z=%f\n", curr_points[i].x, curr_points[i].y, curr_points[i].z);
-        }
-
-
-        // ALLOCAZIONE PUNTI
-        CHECK(cudaMalloc(&d_input, num_points * sizeof(Point)));
-        CHECK(cudaMemcpy(d_input, curr_points, num_points * sizeof(Point), cudaMemcpyHostToDevice)); 
-        
-        // ALLOCAZIONE VOXELS
-        CHECK(cudaMalloc(&d_output, NUM_TOT_VOXELS));
-        CHECK(cudaMemset(d_output, 0, NUM_TOT_VOXELS)); 
-
-        // LANCIO KERNEL
-        dim3 blockSize(THREAD_BLOCK_SIZE);
-        dim3 gridSize((num_points + blockSize - 1) / THREAD_BLOCK_SIZE);
-        voxelization <<<gridSize, blockSize>>>(d_input, d_output);
-
-        //Copia D2H risultati
-        voxels = (int*) malloc(NUM_TOT_VOXELS * sizeof(int));
-        CHECK(cudaMemcpy(d_output, voxels, NUM_TOT_VOXELS * sizeof(int), cudaMemcpyDeviceToHost));
-
-        cudaFree(d_input);
-        cudaFree(d_output);
-    }
-
+    
     close(client_fd);
     close(server_fd);
+
     return 0;
 }
