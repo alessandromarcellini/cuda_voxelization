@@ -1,5 +1,5 @@
 
-#include "point.h"
+#include "params.h"
 
 int compare_names(const void* a, const void* b) {
     const char* name_a = *(const char**)a;
