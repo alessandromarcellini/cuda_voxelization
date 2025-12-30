@@ -5,70 +5,14 @@
 #include <string.h>
 #include <math.h>
 
-// Include GLEW
-#include <GL/glew.h>
-
-// Include GLFW
-#include <GLFW/glfw3.h>
-GLFWwindow* window;
-
-// Include GLM
-#include <glm/glm.hpp>
-using namespace glm;
-#include <glm/gtc/matrix_transform.hpp>
-#include <vector>
-
-#include "common/shader.hpp"
-
-#define FIELDS_PER_POINT 4
-
-#define MAX_X 50 //34
-#define MAX_Y 50 // 22
-#define MAX_Z 10 // 3
-#define MIN_X -50 //-34
-#define MIN_Y -50 // -22
-#define MIN_Z -10 // -3
-
-#define MIN_POINTS_IN_VOXEL_TO_RENDER 0
-
-
-#define DIM_VOXEL 0.1
-
-#define NUM_VOXELS_X ((int)((MAX_X - MIN_X)/DIM_VOXEL))
-#define NUM_VOXELS_Y ((int)((MAX_Y - MIN_Y)/DIM_VOXEL))
-#define NUM_VOXELS_Z ((int)((MAX_Z - MIN_Z)/DIM_VOXEL))
-
-#define NUM_TOT_VOXELS NUM_VOXELS_X * NUM_VOXELS_Y * NUM_VOXELS_Z
-
-#define DIRNAME "../new_dataset"
-
-#define FRAMEDURATION 1.0f // 10 FPS
-
-#define true 1
-#define false 0
-
-
-
-typedef struct {
-  float x;
-  float y;
-  float z;
-} Point;
-
-typedef struct {
-  int i;
-  int j;
-  int k;
-} VoxelIndices;
-
-
+#include "opengl.hpp"
+#include "params.hpp"
 
 int compare_names(const void* a, const void* b) {
     const char* name_a = *(const char**)a;
     const char* name_b = *(const char**)b;
     return strcmp(name_a, name_b);
 }
-
 
 int calculate_num_points(FILE* file) {
     fseek(file, 0, SEEK_END);
@@ -103,7 +47,7 @@ int main(void) {
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
 	// Open a window and create its OpenGL context
-	window = glfwCreateWindow( 1024, 768, "CPU Voxelization", NULL, NULL);
+	window = glfwCreateWindow( 1024, 768, WINDOWNAME, NULL, NULL);
 	if( window == NULL ){
 		fprintf( stderr, "Failed to open GLFW window. If you have an Intel GPU, they are not 3.3 compatible. Try the 2.1 version of the tutorials.\n" );
 		getchar();
@@ -183,20 +127,18 @@ int main(void) {
 	// Vertices colors
 	// One color for each vertex
     float faceGray[6] = {
-        0.85f, // faccia 0 (chiara)
+        0.85f, // face 0 (lighter)
         0.70f,
         0.55f,
         0.40f,
         0.65f,
-        0.50f  // faccia 5 (più scura)
+        0.50f  // face 5 (darker)
     };
 
     std::vector<GLfloat> g_color_buffer_data;
-    g_color_buffer_data.reserve(36 * 3); // 36 vertici, RGB
+    g_color_buffer_data.reserve(36 * 3); // 36 vertices RGB
     for (int face = 0; face < 6; face++) {
         float gray = faceGray[face];
-
-        // ogni faccia ha 6 vertici (2 triangoli)
         for (int v = 0; v < 6; v++) {
             g_color_buffer_data.push_back(gray); // R
             g_color_buffer_data.push_back(gray); // G
@@ -204,50 +146,9 @@ int main(void) {
         }
     }
 
-
-	// static const GLfloat g_color_buffer_data[] = {
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f,
-	// 	1.0f,  1.0f,  1.0f
-	// };
-
     GLuint colorbuffer;
 	glGenBuffers(1, &colorbuffer);
 	glBindBuffer(GL_ARRAY_BUFFER, colorbuffer);
-	// glBufferData(GL_ARRAY_BUFFER, sizeof(g_color_buffer_data), g_color_buffer_data, GL_STATIC_DRAW);
     glBufferData(
         GL_ARRAY_BUFFER,
         g_color_buffer_data.size() * sizeof(float),
@@ -261,7 +162,7 @@ int main(void) {
 	glBufferData(GL_ARRAY_BUFFER, sizeof(g_vertex_buffer_data), g_vertex_buffer_data, GL_STATIC_DRAW);
 
 
-	// Modify camera position
+	// --------------------------------------------------------- Modify camera position
     glm::mat4 Projection = glm::perspective(
         glm::radians(70.0f),
         float(width) / float(height),
@@ -269,17 +170,17 @@ int main(void) {
         200.0f
     );
 
-    // Camera al centro della scena
+    // Camera at the center of the scene
     glm::vec3 cameraPos(
-        (MIN_X + MAX_X / 2) * 0.5f,// 0
+        (MIN_X + MAX_X / 2) * 0.5f, // 0
         (MIN_Y + MAX_Y) * 0.5f,   // 0
-        1.0f                      // altezza camera
+        1.0f                      // camera height
     );
 
-    // Direzione "avanti" (asse X positivo)
+    // Forward direction
     glm::vec3 forward(1.0f, 0.0f, 0.0f);
 
-    // Asse verticale (Z è l'alto)
+    // Upward Axis (Z)
     glm::vec3 up(0.0f, 0.0f, 1.0f);
 
     glm::mat4 View = glm::lookAt(
@@ -292,33 +193,28 @@ int main(void) {
 
 
     // --------------------------SETUP TRANSLATION VECTORS--------------------
-    // inizializzo spazio di rendering voxel
-    // vettore lineare di traslazioni (X * Y * Z)
+    // initializing rendering voxel space
 
-    glm::vec3 ***voxelTranslations = (glm::vec3***)malloc(NUM_VOXELS_X * sizeof(glm::vec3**));
+    glm::vec3 ***voxelTranslationVectors = (glm::vec3***)malloc(NUM_VOXELS_X * sizeof(glm::vec3**));
     for(int i=0; i<NUM_VOXELS_X; i++) {
-        voxelTranslations[i] = (glm::vec3**) malloc(NUM_VOXELS_Y * sizeof(glm::vec3*));
+        voxelTranslationVectors[i] = (glm::vec3**) malloc(NUM_VOXELS_Y * sizeof(glm::vec3*));
         for(int j=0; j < NUM_VOXELS_Y; j++)
-            voxelTranslations[i][j] = (glm::vec3*) calloc(NUM_VOXELS_Z, sizeof(glm::vec3)); // allocates memory and writes all bytes to 0
+            voxelTranslationVectors[i][j] = (glm::vec3*) calloc(NUM_VOXELS_Z, sizeof(glm::vec3)); // allocates memory and writes all bytes to 0
     }
 
-    // popolamento array
     for (int x = 0; x < NUM_VOXELS_X; ++x) {
         for (int y = 0; y < NUM_VOXELS_Y; ++y) {
             for (int z = 0; z < NUM_VOXELS_Z; ++z) {
-                // centro la griglia nell'angolo in basso a sinistra corrispondente al primo voxel
                 glm::vec3 translation(
                     (x * DIM_VOXEL + DIM_VOXEL / 2.0f) + MIN_X,
                     (y * DIM_VOXEL + DIM_VOXEL / 2.0f) + MIN_Y,
                     (z * DIM_VOXEL + DIM_VOXEL / 2.0f) + MIN_Z
                 );
 
-                voxelTranslations[x][y][z] = translation;
+                voxelTranslationVectors[x][y][z] = translation;
             }
         }
     }
-
-    // per applicare la traslazione : gl_Position = projection * view * vec4(worldPos, 1.0);
 
     // --------------------------SETUP VOXELS MATRIX--------------------------
     int ***voxels = (int***) malloc(NUM_VOXELS_X * sizeof(int**));
@@ -337,27 +233,27 @@ int main(void) {
 
     // Fetch all file names and sort them
     struct dirent* entry;
-    char* file_names[10000];
+    char* file_names[10000]; // TODO make this better
     int file_count = 0;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
         file_names[file_count] = strdup(entry->d_name);
         file_count++;
+        if (file_count == 10000) break;
     }
     closedir(dir);
 
     qsort(file_names, file_count, sizeof(char*), compare_names);
 
-    // ELABORAZIONE FRAME PER FRAME ED INVIO PUNTI
-    //per ogni frame
+    // FRAME BY FRAME COMPUTATIONS
     char path_to_current_frame[512];
     FILE* current_frame;
     
     // FOR EACH FRAME VOXELIZE THE POINT CLOUD
     char* fname;
     float point[FIELDS_PER_POINT];
-    int num_frame = 0, num_points;
+    int num_frame = 0;
     float lastFrameTime = glfwGetTime();
 
     do {
@@ -378,36 +274,35 @@ int main(void) {
             }
             fname = file_names[num_frame];
             sprintf(path_to_current_frame, "%s/%s", DIRNAME, fname);
-            // caricamento dati in memoria
+            // opening frame file
             current_frame = fopen(path_to_current_frame, "rb");
             if (current_frame == NULL) {
-                perror("Errore apertura file input");
+                perror("ERROR opening frame file in read mode.");
                 continue;
             }
-            //num_points = calculate_num_points(current_frame);
-            // Reinizializza voxels a tutti zeri
+            // reset voxels data to all zeros
             for(int i = 0; i < NUM_VOXELS_X; i++) {
                 for(int j = 0; j < NUM_VOXELS_Y; j++) {
                     memset(voxels[i][j], 0, NUM_VOXELS_Z * sizeof(int));
                 }
             }
-            // Lettura
+            // load frame data
             while (fread(point, sizeof(float), FIELDS_PER_POINT, current_frame) == FIELDS_PER_POINT) {
-                // trova il voxel in cui è
+                // for each point find in which voxel it is
                 VoxelIndices curr_voxel_indices = calculate_voxel_indices(point);
 
 
                 if(curr_voxel_indices.i < 0 || curr_voxel_indices.i >= NUM_VOXELS_X ||
                     curr_voxel_indices.j < 0 || curr_voxel_indices.j >= NUM_VOXELS_Y ||
                     curr_voxel_indices.k < 0 || curr_voxel_indices.k >= NUM_VOXELS_Z) {
-                        // punto fuori dai limiti
+                        // point out of bounds
                         continue;
                 }
 
                 voxels[curr_voxel_indices.i][curr_voxel_indices.j][curr_voxel_indices.k]++;
             }
             fclose(current_frame);
-            printf("FINITO FILE %s\n", fname);
+            printf("FINISHED COMPUTING FILE: %s\n", fname);
             num_frame++;
         }
 
@@ -440,7 +335,7 @@ int main(void) {
                 for (int k = 0; k < NUM_VOXELS_Z; k++) {
                     if (voxels[i][j][k] > MIN_POINTS_IN_VOXEL_TO_RENDER) {
                         //render it
-                        glm::mat4 Model1 = glm::translate(glm::mat4(1.0f), voxelTranslations[i][j][k]);
+                        glm::mat4 Model1 = glm::translate(glm::mat4(1.0f), voxelTranslationVectors[i][j][k]);
                         Model1 = glm::scale(Model1, glm::vec3(DIM_VOXEL / 2.0f));
                         glm::mat4 MVP1 = Projection * View * Model1;
                         glUniformMatrix4fv(MatrixID, 1, GL_FALSE, &MVP1[0][0]);
@@ -449,13 +344,6 @@ int main(void) {
                 }
             }
         }
-
-        // --- CUBE EXAMPLE: LEFT TRANSLATED ---
-        // glm::mat4 Model1 = glm::translate(glm::mat4(1.0f), glm::vec3(-2.0f, 1.0f, 0.0f));
-        // glm::mat4 MVP1 = Projection * View * Model1;
-        // glUniformMatrix4fv(MatrixID, 1, GL_FALSE, &MVP1[0][0]);
-        // glDrawArrays(GL_TRIANGLES, 0, 12*3);
-        // END OF EXAMPLE---------------------------------
 
         glDisableVertexAttribArray(0);
         glDisableVertexAttribArray(1);
@@ -475,6 +363,9 @@ int main(void) {
 
 	// Close OpenGL window and terminate GLFW
 	glfwTerminate();
+
+    free(voxels);
+    free(voxelTranslationVectors);
 
 	return 0;
 }
