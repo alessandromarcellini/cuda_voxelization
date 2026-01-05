@@ -5,22 +5,25 @@
 #include <string.h>
 #include <math.h>
 #include <arpa/inet.h>
+#include <cuda_runtime.h>
 
 #include "opengl.hpp"
 #include "params.hpp"
 #define PORT 53456
 
-#define THREAD_BLOCK_SIZE 256
+#define THREAD_BLOCK_SIZE 8
 
-/*#define CHECK(call){
-    const cudaError_t error = call;
-        if (error != cudaSuccess){
-        printf("Error: %s:%d, ", __FILE__, __LINE__);
-        printf("code:%d, reason: %s\n", error,
-        cudaGetErrorString(error));
-        exit(1);
-    }
-}*/
+#define CHECK(call)                                                     \
+do {                                                                    \
+    const cudaError_t error = call;                                     \
+    if (error != cudaSuccess) {                                         \
+        printf("Error: %s:%d, ", __FILE__, __LINE__);                   \
+        printf("code:%d, reason: %s\n", error,                          \
+               cudaGetErrorString(error));                              \
+        exit(1);                                                        \
+    }                                                                   \
+} while (0)
+
 
 __global__ void vectorGeneration(float4* d_vectors) {
 
@@ -35,9 +38,9 @@ __global__ void vectorGeneration(float4* d_vectors) {
         return;
 
     float4 vector = {
-        x * DIM_VOXEL + DIM_VOXEL / 2.0f,
-        y * DIM_VOXEL + DIM_VOXEL / 2.0f,
-        z * DIM_VOXEL + DIM_VOXEL / 2.0f,
+        (x * DIM_VOXEL + DIM_VOXEL / 2.0f) + MIN_X,
+        (y * DIM_VOXEL + DIM_VOXEL / 2.0f) + MIN_Y,
+        (z * DIM_VOXEL + DIM_VOXEL / 2.0f) + MIN_Z,
         1.0f
     };
 
@@ -236,7 +239,8 @@ int main(void) {
     int server_fd, client_fd;
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
-    Point* curr_points, d_input;
+    Point* curr_points;
+    Point* d_input;
 
     // -------------------------------- SET TRASLATION VECTORS --------------------------------
 
@@ -277,9 +281,9 @@ int main(void) {
 
     // lancio kernel
 
-    float4 vectorTranslations[NUM_TOT_VOXELS];
+    float4* vectorTranslations = (float4*) malloc(NUM_TOT_VOXELS * sizeof(float4));
     float4* d_vectors;
-    cudaMalloc(&d_vectors, NUM_TOT_VOXELS*sizeof(float4));
+    CHECK(cudaMalloc(&d_vectors, NUM_TOT_VOXELS*sizeof(float4)));
 
     dim3 blockSize(THREAD_BLOCK_SIZE, THREAD_BLOCK_SIZE, THREAD_BLOCK_SIZE);
     dim3 gridSize(                           
@@ -289,8 +293,8 @@ int main(void) {
     );
 
     vectorGeneration <<<gridSize, blockSize>>>(d_vectors);
-    cudaMemcpy(d_vectors, vectorTranslations, NUM_TOT_VOXELS * sizeof(float4), cudaMemcpyDeviceToHost);
-    cudaFree(d_vectors);
+    CHECK(cudaMemcpy(vectorTranslations, d_vectors, NUM_TOT_VOXELS * sizeof(float4), cudaMemcpyDeviceToHost));
+    CHECK(cudaFree(d_vectors));
     // rilascio risorse CUDA, d'ora in poi lo spazio di memoria diventa un normale buffer openGL
     //cudaGraphicsUnmapResources(1, &cudaResource, 0);
 
@@ -333,7 +337,8 @@ int main(void) {
     int num_points_recvd = 0;
     int num_points = 0;
     int* d_output;
-    int voxels[NUM_TOT_VOXELS];
+    int* voxels = (int*) malloc(NUM_TOT_VOXELS * sizeof(int));
+    memset(voxels, 0, NUM_TOT_VOXELS * sizeof(int));
 
     // coda di numero di punti
     // coda di punti con più punti di frame diversi
@@ -356,11 +361,12 @@ int main(void) {
         // -----------------"ASYNC" recv while not computing-------------------------
         if (!received_num_points) {
             recv(client_fd, &num_points, sizeof(int), 0);
+
             curr_points = (Point*) malloc(num_points * sizeof(Point));
             received_num_points = true;
         }
         if (received_num_points && num_points_recvd < num_points) {
-            recv(client_fd, &curr_points[num_points_recvd], sizeof(Point), 0);
+            recv(client_fd, curr_points + num_points_recvd, sizeof(Point), 0);
             num_points_recvd++;
         }
 
@@ -371,7 +377,7 @@ int main(void) {
             memset(voxels, 0, NUM_TOT_VOXELS * sizeof(int));
             // recv ultimi punti rimasti
             for (; num_points_recvd < num_points; num_points_recvd++) {
-                recv(client_fd, &curr_points[num_points_recvd], sizeof(Point), 0);
+                recv(client_fd, curr_points + num_points_recvd, sizeof(Point), 0);
             }
 
             received_num_points = false;
@@ -381,26 +387,26 @@ int main(void) {
 
             // -----------------------VOXELIZATION-------------------------------
             // ALLOCAZIONE PUNTI
-            cudaMalloc(&d_input, num_points * sizeof(Point));
-            cudaMemcpy(d_input, curr_points, num_points * sizeof(Point), cudaMemcpyHostToDevice); 
+            CHECK(cudaMalloc(&d_input, num_points * sizeof(Point)));
+            CHECK(cudaMemcpy(d_input, curr_points, num_points * sizeof(Point), cudaMemcpyHostToDevice)); 
             
             // ALLOCAZIONE VOXELS
-            cudaMalloc(&d_output, NUM_TOT_VOXELS * sizeof(int));
-            cudaMemset(d_output, 0, NUM_TOT_VOXELS); 
+            CHECK(cudaMalloc(&d_output, NUM_TOT_VOXELS * sizeof(int)));
+            CHECK(cudaMemset(d_output, 0, NUM_TOT_VOXELS * sizeof(int))); 
 
             // LANCIO KERNEL
             dim3 blockSize(THREAD_BLOCK_SIZE);
             dim3 gridSize((num_points + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE);
             voxelization <<<gridSize, blockSize>>>(d_input, d_output, num_points);
             //Copia D2H risultati
-            voxels = (int*) malloc(NUM_TOT_VOXELS * sizeof(int));
-            cudaMemcpy(d_output, voxels, NUM_TOT_VOXELS * sizeof(int), cudaMemcpyDeviceToHost);
+            //voxels = (int*) malloc(NUM_TOT_VOXELS * sizeof(int));
+            CHECK(cudaMemcpy(voxels, d_output, NUM_TOT_VOXELS * sizeof(int), cudaMemcpyDeviceToHost));
             
             //cleanUP
-            cudaFree(d_input);
-            cudaFree(d_output);
+            CHECK(cudaFree(d_input));
+            CHECK(cudaFree(d_output));
             free(curr_points);
-            
+        }
 
         //---------------------------- RENDER ----------------------------
         // Clear the screen
@@ -429,7 +435,14 @@ int main(void) {
         for (int i = 0; i < NUM_TOT_VOXELS; i++) {
             if (voxels[i] > MIN_POINTS_IN_VOXEL_TO_RENDER) {
                 //render it
-                glm::mat4 Model1 = glm::translate(glm::mat4(1.0f), vectorTranslations[i]);
+
+                glm::vec3 t(
+                    vectorTranslations[i].x,
+                    vectorTranslations[i].y,
+                    vectorTranslations[i].z
+                );
+
+                glm::mat4 Model1 = glm::translate(glm::mat4(1.0f), t);
                 Model1 = glm::scale(Model1, glm::vec3(DIM_VOXEL / 2.0f));
                 glm::mat4 MVP1 = Projection * View * Model1;
                 glUniformMatrix4fv(MatrixID, 1, GL_FALSE, &MVP1[0][0]);
@@ -455,9 +468,9 @@ int main(void) {
 
 	// Close OpenGL window and terminate GLFW
 	glfwTerminate();
-
+    
     free(voxels);
-    free(voxelTranslationVectors);
+    free(vectorTranslations);
     
     close(client_fd);
     close(server_fd);

@@ -1,0 +1,1 @@
+nvcc worker.cu common/shader.cpp     -o ../builds/worker     -lglfw -lGLEW -lGL
