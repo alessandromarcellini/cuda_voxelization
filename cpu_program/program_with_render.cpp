@@ -364,7 +364,20 @@ int main(void) {
 	// Close OpenGL window and terminate GLFW
 	glfwTerminate();
 
+    for (int i = 0; i < NUM_VOXELS_X; i++) {
+        for (int j = 0; j < NUM_VOXELS_Y; j++) {
+            free(voxels[i][j]);
+        }
+        free(voxels[i]);
+    }
     free(voxels);
+
+    for (int i = 0; i < NUM_VOXELS_X; i++) {
+        for (int j = 0; j < NUM_VOXELS_Y; j++) {
+            free(voxelTranslationVectors[i][j]);
+        }
+        free(voxelTranslationVectors[i]);
+    }
     free(voxelTranslationVectors);
 
 	return 0;

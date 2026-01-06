@@ -1,1 +1,2 @@
 g++ program_with_render.cpp common/shader.cpp -o ../builds/program_with_render -lglfw -lGLEW -lGL
+
