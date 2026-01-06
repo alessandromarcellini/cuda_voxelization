@@ -22,7 +22,7 @@
 
 #define FRAMEDURATION 1.0f // 10 FPS
 
-#define WINDOWNAME "CPU Voxelization"
+#define WINDOWNAME "GPU Voxelization"
 
 #define true 1
 #define false 0

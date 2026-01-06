@@ -235,13 +235,6 @@ int main(void) {
 	glm::mat4 Model      = glm::mat4(1.0f);
 	glm::mat4 MVP        = Projection * View * Model;
 
-
-    int server_fd, client_fd;
-    struct sockaddr_in addr;
-    socklen_t addr_len = sizeof(addr);
-    Point* curr_points;
-    Point* d_input;
-
     // -------------------------------- SET TRASLATION VECTORS --------------------------------
 
     // Creating openGL buffer and register it with CUDA
@@ -300,6 +293,11 @@ int main(void) {
 
 
     // --------------------------SETUP SOCKET COMMUNICATION--------------------
+    int server_fd, client_fd;
+    struct sockaddr_in addr;
+    socklen_t addr_len = sizeof(addr);
+    Point* curr_points;
+    Point* d_input;
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
