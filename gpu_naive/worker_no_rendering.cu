@@ -6,7 +6,7 @@
 #include <math.h>
 #include <arpa/inet.h>
 #include <cuda_runtime.h>
-
+#include <time.h>
 #include "params.hpp"
 
 #define THREAD_BLOCK_SIZE 8
@@ -77,10 +77,13 @@ int main(void) {
         (NUM_VOXELS_Z + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE        
     );
 
+    double start_time = clock();
     vectorGeneration <<<gridSize, blockSize>>>(d_vectors);
+    printf("Vector generation kernel launched in %lf clocks.\n", clock() - start_time);
     CHECK(cudaMemcpy(vectorTranslations, d_vectors, NUM_TOT_VOXELS * sizeof(float4), cudaMemcpyDeviceToHost));
     CHECK(cudaFree(d_vectors));
-    
+    printf("Vettori di traslazione generati.\n");
+
     // SETUP SOCKET
     int server_fd, client_fd;
     struct sockaddr_in addr;

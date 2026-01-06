@@ -5,6 +5,7 @@
 #include <string.h>
 #include <math.h>
 #include <glm/glm.hpp>
+#include <time.h>
 #include "params.hpp"
 
 int compare_names(const void* a, const void* b) {
@@ -39,6 +40,8 @@ int main(void) {
         for(int j=0; j < NUM_VOXELS_Y; j++)
             voxelTranslationVectors[i][j] = (glm::vec3*) calloc(NUM_VOXELS_Z, sizeof(glm::vec3)); // allocates memory and writes all bytes to 0
     }
+    
+    double start_time = clock();
 
     for (int x = 0; x < NUM_VOXELS_X; ++x) {
         for (int y = 0; y < NUM_VOXELS_Y; ++y) {
@@ -53,6 +56,8 @@ int main(void) {
             }
         }
     }
+
+    printf("Finished setting up voxel translation vectors : %lf clocks\n", clock() - start_time);
 
     // --------------------------SETUP VOXELS MATRIX--------------------------
     int ***voxels = (int***) malloc(NUM_VOXELS_X * sizeof(int**));
