@@ -26,9 +26,9 @@
 #include "params.hpp"
 
 #define PORT 53456
-#define NUM_BUFFERS 3
-#define THREAD_BLOCK_SIZE 87
-#define MAX_POINTS_PER_BUFFER 128000
+#define NUM_BUFFERS 1
+#define THREAD_BLOCK_SIZE 8
+#define MAX_POINTS_PER_BUFFER 131100
 
 #define CHECK(call)                                                     \
 do {                                                                    \
@@ -94,7 +94,7 @@ __global__ void voxelization(Point* d_input, int* d_output, int num_points) {
 int main(void) {
     //--------------------------------SETUP OPENGL--------------------------------
     // Initialize GLFW
-	if( !glfwInit() )
+	/*if( !glfwInit() )
 	{
 		fprintf( stderr, "Failed to initialize GLFW\n" );
 		getchar();
@@ -252,6 +252,7 @@ int main(void) {
 	glm::mat4 Model      = glm::mat4(1.0f);
 	glm::mat4 MVP        = Projection * View * Model;
 
+
     // -------------------------- GENERAZIONE VETTORI TRASLAZIONE --------------------
 
     float4* vectorTranslations = (float4*) malloc(NUM_TOT_VOXELS * sizeof(float4));
@@ -268,6 +269,9 @@ int main(void) {
     vectorGeneration <<<gridSize, blockSize>>>(d_vectors);
     CHECK(cudaMemcpy(vectorTranslations, d_vectors, NUM_TOT_VOXELS * sizeof(float4), cudaMemcpyDeviceToHost));
     CHECK(cudaFree(d_vectors));
+
+    */
+
 
     // -------------------------- SETUP SOCKET COMMUNICATION --------------------
     int server_fd, client_fd;
@@ -400,5 +404,16 @@ int main(void) {
 
     }
     
+
+    CHECK(cudaStreamDestroy(h2d));
+    CHECK(cudaStreamDestroy(kernel));
+    CHECK(cudaStreamDestroy(d2h));
+
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        CHECK(cudaFreeHost(h_pinned_inputs[i]));
+        CHECK(cudaFreeHost(h_voxels_output[i]));
+        CHECK(cudaFree(d_inputs[i]));
+        CHECK(cudaFree(d_voxels_output[i]));
+    }   
 
 }
