@@ -1,3 +1,18 @@
+// 3 streams:
+//  - 1 H2D
+//  - 1 Kernel
+//  - 1 D2H
+
+// uso memoria host pinned per trasfermenti + malloc iniziale
+
+// uso di cuda events per sincronizzare gli stream tra loro
+
+// allocazione del numero massimo di punti (stimato se fosse un caso reale) per ospitare i punti ogni tot su device
+
+// più buffer per ospitare i punti sul device, non un solo buffer con offset (è più complesso da gestire e non cambia praticamente niente)
+// uso di cuda events per segnalare quando un buffer è stato elaborato e quindi può essere sovrascritto (un evento che segnala che il buffer è libero)
+// uso di ringbuffer per gestire l'uso dei buffer
+
 #include <stdio.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -9,9 +24,11 @@
 
 #include "opengl.hpp"
 #include "params.hpp"
-#define PORT 53456
 
-#define THREAD_BLOCK_SIZE 8
+#define PORT 53456
+#define NUM_BUFFERS 3
+#define THREAD_BLOCK_SIZE 87
+#define MAX_POINTS_PER_BUFFER 128000
 
 #define CHECK(call)                                                     \
 do {                                                                    \
@@ -235,44 +252,7 @@ int main(void) {
 	glm::mat4 Model      = glm::mat4(1.0f);
 	glm::mat4 MVP        = Projection * View * Model;
 
-    // -------------------------------- SET TRASLATION VECTORS --------------------------------
-
-    // Creating openGL buffer and register it with CUDA
-
-    // GLuint voxelOffsetBuffer; // variabile per id buffer openGL
-    // glGenBuffers(1, &voxelOffsetBuffer); // creo il buffer e gli assegno un id
-    // glBindBuffer(GL_ARRAY_BUFFER, voxelOffsetBuffer); // definisco il tipo di buffer
-
-    // glBufferData(GL_ARRAY_BUFFER, // alloco memoria per il buffer
-    //             NUM_TOT_VOXELS * sizeof(float4),
-    //             nullptr,            // nessun dato iniziale
-    //             GL_STATIC_DRAW); // buffer raramente modificato
-
-    // glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-    // // registro il buffer su CUDA
-
-    // cudaGraphicsResource* cudaResource;
-    // cudaGraphicsGLRegisterBuffer(
-    //     &cudaResource, // indirizzo variabile che contiene l'handle del buffer
-    //     voxelOffsetBuffer, // id del buffer openGL
-    //     cudaGraphicsRegisterFlagsNone
-    // );
-
-    // // mappo il buffer
-    // cudaGraphicsMapResources(1, &cudaResource, 0); // lock del buffer su CUDA
-
-    // float4* d_output = nullptr;
-    // size_t size = 0;
-
-    // cudaGraphicsResourceGetMappedPointer(
-    //     (void**)&d_output, // il puntatore device (GPU) reale alla memoria del buffer mappato
-    //     &size,
-    //     cudaResource
-    // );
-
-
-    // lancio kernel
+    // -------------------------- GENERAZIONE VETTORI TRASLAZIONE --------------------
 
     float4* vectorTranslations = (float4*) malloc(NUM_TOT_VOXELS * sizeof(float4));
     float4* d_vectors;
@@ -288,11 +268,8 @@ int main(void) {
     vectorGeneration <<<gridSize, blockSize>>>(d_vectors);
     CHECK(cudaMemcpy(vectorTranslations, d_vectors, NUM_TOT_VOXELS * sizeof(float4), cudaMemcpyDeviceToHost));
     CHECK(cudaFree(d_vectors));
-    // rilascio risorse CUDA, d'ora in poi lo spazio di memoria diventa un normale buffer openGL
-    //cudaGraphicsUnmapResources(1, &cudaResource, 0);
 
-
-    // --------------------------SETUP SOCKET COMMUNICATION--------------------
+    // -------------------------- SETUP SOCKET COMMUNICATION --------------------
     int server_fd, client_fd;
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
@@ -324,153 +301,104 @@ int main(void) {
     }
     printf("Connected with supplier.\n\n");
 
-    // ------------------------FRAME BY FRAME COMPUTATIONS-----------------
+
+    // ------------------------CUDA STREAMS SETUP -----------------
+
+    cudaStream_t h2d, kernel, d2h;
+    CHECK(cudaStreamCreate(&h2d));
+    CHECK(cudaStreamCreate(&kernel));
+    CHECK(cudaStreamCreate(&d2h));
+
+    Point* h_pinned_inputs[NUM_BUFFERS];
+    Point* d_inputs[NUM_BUFFERS];
+    int* d_voxels_output[NUM_BUFFERS];
+    int* h_voxels_output[NUM_BUFFERS];
+
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        // alloco memoria host pinned sulla ram
+        CHECK(cudaMallocHost((void**)&h_pinned_inputs[i], MAX_POINTS_PER_BUFFER * sizeof(Point)));
+        // alloco memoria host per output voxels
+        CHECK(cudaMallocHost((void**)&h_voxels_output[i], NUM_TOT_VOXELS * sizeof(int)));
+        // alloco memoria device
+        CHECK(cudaMalloc((void**)&d_inputs[i], MAX_POINTS_PER_BUFFER * sizeof(Point)));
+        CHECK(cudaMalloc((void**)&d_voxels_output[i], NUM_TOT_VOXELS * sizeof(int)));
+    }
+
+    cudaEvent_t buffer_input_free_events[NUM_BUFFERS];
+    cudaEvent_t h2d_done_event[NUM_BUFFERS];
+    cudaEvent_t kernel_done_event[NUM_BUFFERS];
+    cudaEvent_t buffer_output_done_events[NUM_BUFFERS];
     
-    // FOR EACH FRAME VOXELIZE THE POINT CLOUD
-    Point point;
-    float lastFrameTime = glfwGetTime();
-    bool time_to_advance_frame;
-    bool received_num_points = false;
-    int num_points_recvd = 0;
-    int num_points = 0;
-    int* d_output;
-    int* voxels = (int*) malloc(NUM_TOT_VOXELS * sizeof(int));
-    memset(voxels, 0, NUM_TOT_VOXELS * sizeof(int));
+    for (int i = 0; i < NUM_BUFFERS; i++) { 
+        CHECK(cudaEventCreate(&buffer_input_free_events[i]));
+        CHECK(cudaEventCreate(&buffer_output_done_events[i]));
+        CHECK(cudaEventCreate(&h2d_done_event[i]));
+        CHECK(cudaEventCreate(&kernel_done_event[i]));
+        // inizialmente tutti i buffer sono free
+        CHECK(cudaEventRecord(buffer_input_free_events[i], 0));
+        CHECK(cudaEventRecord(buffer_output_done_events[i], 0));
+    }   
 
-    // coda di numero di punti
-    // coda di punti con più punti di frame diversi
+    int num_points;
+    int i = 0;
+    int current_buffer = 0;
 
-    // recv di numero punti -> recv Point e count_recvd++ -> recv Point e count_recvd++
-    // se time_to_advance => recv Point num_points - count_recvd => computation
-
-
-    do {
-        //--------------------CHECK IF IT'S TIME TO UPDATE---------------------------
-        float currentTime = glfwGetTime();
-        float deltaTime = currentTime - lastFrameTime;
-
-        time_to_advance_frame = false;
-        if (deltaTime >= FRAMEDURATION) {
-            time_to_advance_frame = true;
-            lastFrameTime = currentTime;
-        }
-
-        // -----------------"ASYNC" recv while not computing-------------------------
-        if (!received_num_points) {
-            recv(client_fd, &num_points, sizeof(int), 0);
-
-            curr_points = (Point*) malloc(num_points * sizeof(Point));
-            received_num_points = true;
-        }
-        if (received_num_points && num_points_recvd < num_points) {
-            recv(client_fd, curr_points + num_points_recvd, sizeof(Point), 0);
-            num_points_recvd++;
-        }
-
+    // LOOP RICEZIONE
+    while (recv(client_fd, &num_points, sizeof(int), 0) > 0) { 
         
-        // ----------------------------UPDATE VOXEL DATA----------------------------
-        if (time_to_advance_frame) {
-            // reset voxels data to all zeros
-            memset(voxels, 0, NUM_TOT_VOXELS * sizeof(int));
-            // recv ultimi punti rimasti
-            for (; num_points_recvd < num_points; num_points_recvd++) {
-                recv(client_fd, curr_points + num_points_recvd, sizeof(Point), 0);
-            }
-
-            received_num_points = false;
-            num_points_recvd = 0;
-
-            
-
-            // -----------------------VOXELIZATION-------------------------------
-            // ALLOCAZIONE PUNTI
-            CHECK(cudaMalloc(&d_input, num_points * sizeof(Point)));
-            CHECK(cudaMemcpy(d_input, curr_points, num_points * sizeof(Point), cudaMemcpyHostToDevice)); 
-            
-            // ALLOCAZIONE VOXELS
-            CHECK(cudaMalloc(&d_output, NUM_TOT_VOXELS * sizeof(int)));
-            CHECK(cudaMemset(d_output, 0, NUM_TOT_VOXELS * sizeof(int))); 
-
-            // LANCIO KERNEL
-            dim3 blockSize(THREAD_BLOCK_SIZE);
-            dim3 gridSize((num_points + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE);
-            voxelization <<<gridSize, blockSize>>>(d_input, d_output, num_points);
-            //Copia D2H risultati
-            //voxels = (int*) malloc(NUM_TOT_VOXELS * sizeof(int));
-            CHECK(cudaMemcpy(voxels, d_output, NUM_TOT_VOXELS * sizeof(int), cudaMemcpyDeviceToHost));
-            
-            //cleanUP
-            CHECK(cudaFree(d_input));
-            CHECK(cudaFree(d_output));
-            free(curr_points);
+        current_buffer = i % NUM_BUFFERS;
+        printf("Ricevuti %d punti da elaborare.\n", num_points);
+        
+        // 2. FIX RICEZIONE: Ricevi tutto il blocco in una volta
+        int total_received = 0;
+        int bytes_expected = num_points * sizeof(Point);
+        while(total_received < bytes_expected) {
+            int received = recv(client_fd, (char*)h_pinned_inputs[current_buffer] + total_received, bytes_expected - total_received, 0);
+            if (received <= 0) break; // Errore o chiusura
+            total_received += received;
         }
 
-        //---------------------------- RENDER ----------------------------
-        // Clear the screen
-        glClear(GL_COLOR_BUFFER_BIT);
+        // --- VOXELIZATION ---
 
-        // Use our shader
-        glUseProgram(programID);
-
-        GLuint MatrixID = glGetUniformLocation(programID, "MVP");
-
-        // 1st attribute buffer : vertices
-        glEnableVertexAttribArray(0);
-        glBindBuffer(GL_ARRAY_BUFFER, vertexbuffer);
-        glVertexAttribPointer(
-            0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0
-        );
-
-        // 2nd attribute buffer : colors
-        glEnableVertexAttribArray(1);
-        glBindBuffer(GL_ARRAY_BUFFER, colorbuffer);
-        glVertexAttribPointer(
-            1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0
-        );
-
-        //---------------------render current voxels-------------------------------
-        for (int i = 0; i < NUM_TOT_VOXELS; i++) {
-            if (voxels[i] > MIN_POINTS_IN_VOXEL_TO_RENDER) {
-                //render it
-
-                glm::vec3 t(
-                    vectorTranslations[i].x,
-                    vectorTranslations[i].y,
-                    vectorTranslations[i].z
-                );
-
-                glm::mat4 Model1 = glm::translate(glm::mat4(1.0f), t);
-                Model1 = glm::scale(Model1, glm::vec3(DIM_VOXEL / 2.0f));
-                glm::mat4 MVP1 = Projection * View * Model1;
-                glUniformMatrix4fv(MatrixID, 1, GL_FALSE, &MVP1[0][0]);
-                glDrawArrays(GL_TRIANGLES, 0, 12*3);
-            }
+        if (cudaEventQuery(buffer_input_free_events[current_buffer]) != cudaSuccess) {
+            // il buffer input non è ancora libero, aspetto
+            CHECK(cudaEventSynchronize(buffer_input_free_events[current_buffer]));
         }
 
-        glDisableVertexAttribArray(0);
-        glDisableVertexAttribArray(1);
+        CHECK(cudaMemcpyAsync(d_inputs[current_buffer], h_pinned_inputs[current_buffer], num_points * sizeof(Point), cudaMemcpyHostToDevice, h2d)); 
+        CHECK(cudaEventRecord(h2d_done_event[current_buffer], h2d));
 
-        // Swap buffers
-        glfwSwapBuffers(window);
-        glfwPollEvents();
+        if (cudaEventQuery(buffer_output_done_events[current_buffer]) != cudaSuccess) {
+            // il buffer output non è ancora libero, aspetto
+            CHECK(cudaEventSynchronize(buffer_output_done_events[current_buffer]));
+        }
 
-    } // Check if the ESC key was pressed or the window was closed
-	while( glfwGetKey(window, GLFW_KEY_ESCAPE ) != GLFW_PRESS &&
-		   glfwWindowShouldClose(window) == 0 );
+        CHECK(cudaMemsetAsync(d_voxels_output[current_buffer], 0, NUM_TOT_VOXELS * sizeof(int), d2h)); 
 
-	// Cleanup VBO
-	glDeleteBuffers(1, &vertexbuffer);
-	glDeleteVertexArrays(1, &VertexArrayID);
-	glDeleteProgram(programID);
+        dim3 blockVox(THREAD_BLOCK_SIZE);
+        dim3 gridVox((num_points + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE);
+        
+        if (cudaEventQuery(h2d_done_event[current_buffer]) != cudaSuccess) {
+            // l'host to device non è ancora finito, aspetto
+            CHECK(cudaEventSynchronize(h2d_done_event[current_buffer]));
+        }
 
-	// Close OpenGL window and terminate GLFW
-	glfwTerminate();
+        voxelization <<<gridVox, blockVox, 0, kernel>>>(d_inputs[current_buffer], d_voxels_output[current_buffer], num_points);
+        CHECK(cudaEventRecord(kernel_done_event[current_buffer], kernel));
+        CHECK(cudaEventRecord(buffer_input_free_events[current_buffer], h2d));
+
+        CHECK(cudaMemcpyAsync(h_voxels_output[current_buffer], d_voxels_output[current_buffer], NUM_TOT_VOXELS * sizeof(int), cudaMemcpyDeviceToHost, d2h));
+        CHECK(cudaEventRecord(buffer_output_done_events[current_buffer], d2h));
+
+    /*    if (cudaEventQuery(buffer_output_done_events[current_buffer]) == cudaSuccess) {
+            
+        }   
+    */
+
+        printf("Voxelization completata per questo frame.\n");
+        i++;
+
+    }
     
-    free(voxels);
-    free(vectorTranslations);
-    
-    close(client_fd);
-    close(server_fd);
 
-    return 0;
 }

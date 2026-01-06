@@ -1,0 +1,48 @@
+nvcc worker.cu common/shader.cpp     -o ../builds/worker     -lglfw -lGLEW -lGL
+
+
+!nvcc worker_no_rendering.cu -o worker_no_rendering -arch=sm_75
+!echo "Compilazione Worker (worker_no_rendering) completata."
+
+# Compila il Supplier (C++) -> Crea 'supplier'
+# Assumo che il sorgente si chiami supplier.cpp
+!g++ supplier.cpp -o supplier -O3
+!echo "Compilazione Supplier (supplier) completata."
+
+# --- 2. PULIZIA ---
+
+# Uccidi eventuali processi vecchi rimasti appesi
+!pkill -f worker_no_rendering
+!pkill -f supplier
+
+!echo "--- Avvio Orchestrazione ---"
+
+# --- 3. ESECUZIONE PARALLELA ---
+
+# A. Avvia il Worker in background
+#    - stdbuf -oL: forza la scrittura dei log riga per riga
+#    - > worker_log.txt 2>&1: salva output ed errori nel file
+#    - &: manda in background
+#!stdbuf -oL ./worker_no_rendering > worker_log.txt 2>&1 &
+# Example: Profile and save the report to 'worker_report.ncu-rep'
+!# Lancia ncu sul worker, salva il report in 'report_worker', logga l'output su file e va in background
+!ncu -o report_worker --force --set full ./worker_no_rendering > worker_ncu_log.txt 2>&1 &
+!echo "Worker avviato in background."
+
+# B. Aspetta che il Worker inizializzi CUDA e la Socket
+!echo "Attendo 10 secondi per inizializzazione..."
+!sleep 10
+
+# C. Check di sicurezza: vediamo se la porta è aperta
+!echo "Controllo porte attive (Dovresti vedere la porta 53456):"
+!netstat -tlpn | grep 53456
+
+# D. Avvia il Supplier (in foreground)
+#    Il supplier si connetterà al worker che è già in ascolto
+!echo "--- Lancio il Supplier ---"
+!./supplier
+
+# --- 4. DIAGNOSTICA FINALE ---
+
+!echo ""
+!echo "--- Esecuzione terminata ---"
