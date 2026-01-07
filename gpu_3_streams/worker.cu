@@ -28,7 +28,7 @@
 
 
 #define PORT 53456
-#define NUM_BUFFERS 1
+#define NUM_BUFFERS 2
 #define THREAD_BLOCK_SIZE 8
 #define MAX_POINTS_PER_BUFFER 131100
 
@@ -199,6 +199,21 @@ int main(void) {
         if (cudaEventQuery(buffer_output_done_events[current_buffer]) != cudaSuccess) {
             // il buffer output non è ancora libero, aspetto
             CHECK(cudaEventSynchronize(buffer_output_done_events[current_buffer]));
+
+
+            // PROBLEMAAAA 1
+
+
+            // facendo la event synchronize, l'evento buffer output done viene resettato
+            // quindi quando sotto vado a rifare la cudaEventRecord non vedo più l'evento precedente e non scrivo niente sulla socket
+
+
+            // PROBLEMAAAA 2
+
+            
+            // non dobbiamo usare la event synchronize che rallenta notevolmente l'inserimento di operazioni asincrone negli stream
+            // capire se ricreare un nuovo evento per ogni iterazione del ciclo
+
         }
 
         CHECK(cudaMemsetAsync(d_voxels_output[current_buffer], 0, NUM_TOT_VOXELS * sizeof(int), d2h)); 
@@ -215,23 +230,39 @@ int main(void) {
         CHECK(cudaEventRecord(kernel_done_event[current_buffer], kernel));
         CHECK(cudaEventRecord(buffer_input_free_events[current_buffer], h2d));
 
+        if (cudaEventQuery(kernel_done_event[current_buffer]) != cudaSuccess) {
+            // il kernel non è ancora finito, aspetto
+            CHECK(cudaEventSynchronize(kernel_done_event[current_buffer]));
+        }
+
         CHECK(cudaMemcpyAsync(h_voxels_output[current_buffer], d_voxels_output[current_buffer], NUM_TOT_VOXELS * sizeof(int), cudaMemcpyDeviceToHost, d2h));
         CHECK(cudaEventRecord(buffer_output_done_events[current_buffer], d2h));
-
-       if (cudaEventQuery(buffer_output_done_events[current_buffer]) == cudaSuccess) {
-            
-        }
-        // controllo se sono stati lanciati eventi di output_done e in caso positivo li invio sulla socket verso il renderer
-        for (int j = 0; j < NUM_BUFFERS; j++) {
-            if (cudaEventQuery(buffer_output_done_events[current_buffer]))
-        }
         
         // Controllo se ci sono dei buffer cpu pronti da inviare e in caso li invio
         curr_buffer_sent = 0;
         for (int j=1; j < NUM_BUFFERS + 1; j++) {
-            if (buffer_output_done_events[(count_buffer_sent + j) % NUM_BUFFERS] == cudaSuccess) {
-                send(renderer_fd, h_voxels_output[(count_buffer_sent + j) % NUM_BUFFERS], NUM_TOT_VOXELS * sizeof(int), 0);
-                printf("Inviato buffer %d (%zu bytes) al renderer.\n", buf, total_bytes);
+            if (cudaEventQuery(buffer_output_done_events[(count_buffer_sent + j) % NUM_BUFFERS]) == cudaSuccess) {
+                
+
+                //NON ENTRA MAI IN QUESTO RAMO
+                printf("Invio del buffer %d al renderer...\n", (count_buffer_sent + j) % NUM_BUFFERS);
+
+                int buffer_idx = (count_buffer_sent + j) % NUM_BUFFERS;
+                int bytes_to_send = NUM_TOT_VOXELS * sizeof(int);
+                int total_sent = 0;
+                
+                // Ensure all data is sent
+                while (total_sent < bytes_to_send) {
+                    int sent = send(renderer_fd, (char*)h_voxels_output[buffer_idx] + total_sent, bytes_to_send - total_sent, 0);
+                    printf("Inviati %d bytes.\n", sent);
+
+                    if (sent < 0) {
+                        perror("Error sending voxel data");
+                        break;
+                    }
+                    total_sent += sent;
+                }
+                printf("Inviato buffer %d (%d bytes) al renderer.\n", buffer_idx, total_sent);
                 curr_buffer_sent++;
             }
             else {

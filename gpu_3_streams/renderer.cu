@@ -7,11 +7,12 @@
 #include <arpa/inet.h>
 #include <cuda_runtime.h>
 #include <fcntl.h>
+#include <errno.h>
 
 #include "opengl.hpp"
 #include "params.hpp"
 
-
+#define THREAD_BLOCK_SIZE 8
 #define PORT 60000 // todo mettila in params come renderer_port
 
 #define CHECK(call)                                                     \
@@ -51,40 +52,7 @@ __global__ void vectorGeneration(float4* d_vectors) {
 
 
 int main() {
-    // -------------------------- SETUP SOCKET COMMUNICATION --------------------
-    int server_fd, client_fd;
-    struct sockaddr_in addr;
-    socklen_t addr_len = sizeof(addr);
-    Point* curr_points;
-    Point* d_input;
 
-    server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) {
-        perror("Error creating socket");
-        exit(1);
-    }
-
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(PORT);
-
-    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        perror("Error binding socket");
-        exit(1);
-    }
-
-    listen(server_fd, 1);
-    printf("Renderer listening on port %d...\n", PORT);
-
-    client_fd = accept(server_fd, (struct sockaddr*)&addr, &addr_len);
-    if (client_fd < 0) {
-        perror("Error accepting request");
-        exit(1);
-    }
-    printf("Connected with Worker.\n\n");
-
-    int flags = fcntl(server_fd, F_GETFL, 0);
-    fcntl(server_fd, F_SETFL, flags | O_NONBLOCK);
 
     //--------------------------------SETUP OPENGL--------------------------------
     // Initialize GLFW
@@ -264,11 +232,51 @@ int main() {
     CHECK(cudaMemcpy(vectorTranslations, d_vectors, NUM_TOT_VOXELS * sizeof(float4), cudaMemcpyDeviceToHost));
     CHECK(cudaFree(d_vectors));
 
+
+
+    // -------------------------- SETUP SOCKET COMMUNICATION --------------------
+    int server_fd, client_fd;
+    struct sockaddr_in addr;
+    socklen_t addr_len = sizeof(addr);
+    Point* curr_points;
+    Point* d_input;
+
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        perror("Error creating socket");
+        exit(1);
+    }
+
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(PORT);
+
+    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("Error binding socket");
+        exit(1);
+    }
+
+    listen(server_fd, 1);
+    printf("Renderer listening on port %d...\n", PORT);
+
+    client_fd = accept(server_fd, (struct sockaddr*)&addr, &addr_len);
+    if (client_fd < 0) {
+        perror("Error accepting request");
+        exit(1);
+    }
+    printf("Connected with Worker.\n\n");
+
+    // Set client socket to non-blocking mode
+    int flags = fcntl(client_fd, F_GETFL, 0);
+    fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+
     // -------------------------- RENDER LOOP --------------------
     float lastFrameTime = glfwGetTime();
     bool time_to_advance_frame;
     int num_points = 0;
     int* voxels = (int*) malloc(NUM_TOT_VOXELS * sizeof(int));
+    memset(voxels, 0, NUM_TOT_VOXELS * sizeof(int)); // Initialize to zeros
+
     do {
         //--------------------CHECK IF IT'S TIME TO UPDATE---------------------------
         float currentTime = glfwGetTime();
@@ -283,15 +291,8 @@ int main() {
         // ----------------------------UPDATE VOXEL DATA----------------------------
         if (time_to_advance_frame) {
             // ricevo voxels e renderizzo
-
-            if (recv(client_fd, voxels, NUM_TOT_VOXELS * sizeof(int), 0) < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    // Nessun dato disponibile (normale) => skip
-                } else {
-                    // Errore reale
-                    printf("\n\n\nMERDA\n\n\n");
-                }
-            }
+            int bytes_expected = NUM_TOT_VOXELS * sizeof(int);
+            recv(client_fd, voxels, bytes_expected, 0);
 
         }
 
