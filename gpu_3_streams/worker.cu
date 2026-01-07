@@ -22,8 +22,10 @@
 #include <arpa/inet.h>
 #include <cuda_runtime.h>
 
-#include "opengl.hpp"
 #include "params.hpp"
+#define RENDERER_PORT 60000
+
+
 
 #define PORT 53456
 #define NUM_BUFFERS 1
@@ -41,29 +43,6 @@ do {                                                                    \
     }                                                                   \
 } while (0)
 
-
-__global__ void vectorGeneration(float4* d_vectors) {
-
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int z = blockIdx.z * blockDim.z + threadIdx.z;
-    int nx = gridDim.x * blockDim.x;
-    int ny = gridDim.y * blockDim.y;
-    int idx = z * (nx * ny) + y * nx + x;
-
-    if (x >= NUM_VOXELS_X || y >= NUM_VOXELS_Y || z >= NUM_VOXELS_Z)
-        return;
-
-    float4 vector = {
-        (x * DIM_VOXEL + DIM_VOXEL / 2.0f) + MIN_X,
-        (y * DIM_VOXEL + DIM_VOXEL / 2.0f) + MIN_Y,
-        (z * DIM_VOXEL + DIM_VOXEL / 2.0f) + MIN_Z,
-        1.0f
-    };
-
-    d_vectors[idx] = vector;
-
-}
 
 __global__ void voxelization(Point* d_input, int* d_output, int num_points) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -92,187 +71,6 @@ __global__ void voxelization(Point* d_input, int* d_output, int num_points) {
 
 
 int main(void) {
-    //--------------------------------SETUP OPENGL--------------------------------
-    // Initialize GLFW
-	/*if( !glfwInit() )
-	{
-		fprintf( stderr, "Failed to initialize GLFW\n" );
-		getchar();
-		return -1;
-	}
-
-	glfwWindowHint(GLFW_SAMPLES, 4);
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE); // To make macOS happy; should not be needed
-	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-
-	// Open a window and create its OpenGL context
-	window = glfwCreateWindow( 1024, 768, WINDOWNAME, NULL, NULL);
-	if( window == NULL ){
-		fprintf( stderr, "Failed to open GLFW window. If you have an Intel GPU, they are not 3.3 compatible. Try the 2.1 version of the tutorials.\n" );
-		getchar();
-		glfwTerminate();
-		return -1;
-	}
-	glfwMakeContextCurrent(window);
-
-    int width, height;
-    glfwGetFramebufferSize(window, &width, &height);
-    glViewport(0, 0, width, height);
-
-
-	// Initialize GLEW
-	glewExperimental = true; // Needed for core profile
-	if (glewInit() != GLEW_OK) {
-		fprintf(stderr, "Failed to initialize GLEW\n");
-		getchar();
-		glfwTerminate();
-		return -1;
-	}
-
-	// Ensure we can capture the escape key being pressed below
-	glfwSetInputMode(window, GLFW_STICKY_KEYS, GL_TRUE);
-    // ---------------------------------------------------------------- Dark blue background
-	glClearColor(0.0f, 0.0f, 0.4f, 0.0f);
-
-	GLuint VertexArrayID;
-	glGenVertexArrays(1, &VertexArrayID);
-	glBindVertexArray(VertexArrayID);
-
-	// -----------------------------------------------------------------Create and compile our GLSL program from the shaders
-	GLuint programID = LoadShaders( "../opengl_cubes_test/SimpleVertexShader.vertexshader", "../opengl_cubes_test/SimpleFragmentShader.fragmentshader" );
-
-
-	// The vertices. Three consecutive floats give a 3D vertex; Three consecutive vertices give a triangle.
-	// A cube has 6 faces with 2 triangles each, so this makes 6*2=12 triangles, and 12*3 vertices
-	static const GLfloat g_vertex_buffer_data[] = {
-		-1.0f,-1.0f,-1.0f, // triangle 1 : begin
-		-1.0f,-1.0f, 1.0f,
-		-1.0f, 1.0f, 1.0f, // triangle 1 : end
-		1.0f, 1.0f,-1.0f, // triangle 2 : begin
-		-1.0f,-1.0f,-1.0f,
-		-1.0f, 1.0f,-1.0f, // triangle 2 : end
-		1.0f,-1.0f, 1.0f,
-		-1.0f,-1.0f,-1.0f,
-		1.0f,-1.0f,-1.0f,
-		1.0f, 1.0f,-1.0f,
-		1.0f,-1.0f,-1.0f,
-		-1.0f,-1.0f,-1.0f,
-		-1.0f,-1.0f,-1.0f,
-		-1.0f, 1.0f, 1.0f,
-		-1.0f, 1.0f,-1.0f,
-		1.0f,-1.0f, 1.0f,
-		-1.0f,-1.0f, 1.0f,
-		-1.0f,-1.0f,-1.0f,
-		-1.0f, 1.0f, 1.0f,
-		-1.0f,-1.0f, 1.0f,
-		1.0f,-1.0f, 1.0f,
-		1.0f, 1.0f, 1.0f,
-		1.0f,-1.0f,-1.0f,
-		1.0f, 1.0f,-1.0f,
-		1.0f,-1.0f,-1.0f,
-		1.0f, 1.0f, 1.0f,
-		1.0f,-1.0f, 1.0f,
-		1.0f, 1.0f, 1.0f,
-		1.0f, 1.0f,-1.0f,
-		-1.0f, 1.0f,-1.0f,
-		1.0f, 1.0f, 1.0f,
-		-1.0f, 1.0f,-1.0f,
-		-1.0f, 1.0f, 1.0f,
-		1.0f, 1.0f, 1.0f,
-		-1.0f, 1.0f, 1.0f,
-		1.0f,-1.0f, 1.0f
-	};
-
-	// Vertices colors
-	// One color for each vertex
-    float faceGray[6] = {
-        0.85f, // face 0 (lighter)
-        0.70f,
-        0.55f,
-        0.40f,
-        0.65f,
-        0.50f  // face 5 (darker)
-    };
-
-    std::vector<GLfloat> g_color_buffer_data;
-    g_color_buffer_data.reserve(36 * 3); // 36 vertices RGB
-    for (int face = 0; face < 6; face++) {
-        float gray = faceGray[face];
-        for (int v = 0; v < 6; v++) {
-            g_color_buffer_data.push_back(gray); // R
-            g_color_buffer_data.push_back(gray); // G
-            g_color_buffer_data.push_back(gray); // B
-        }
-    }
-
-    GLuint colorbuffer;
-	glGenBuffers(1, &colorbuffer);
-	glBindBuffer(GL_ARRAY_BUFFER, colorbuffer);
-    glBufferData(
-        GL_ARRAY_BUFFER,
-        g_color_buffer_data.size() * sizeof(float),
-        g_color_buffer_data.data(),
-        GL_STATIC_DRAW
-    );
-
-	GLuint vertexbuffer;
-	glGenBuffers(1, &vertexbuffer);
-	glBindBuffer(GL_ARRAY_BUFFER, vertexbuffer);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(g_vertex_buffer_data), g_vertex_buffer_data, GL_STATIC_DRAW);
-
-
-	// --------------------------------------------------------- Modify camera position
-    glm::mat4 Projection = glm::perspective(
-        glm::radians(70.0f),
-        float(width) / float(height),
-        0.1f,
-        200.0f
-    );
-
-    // Camera at the center of the scene
-    glm::vec3 cameraPos(
-        (MIN_X + MAX_X / 2) * 0.5f, // 0
-        (MIN_Y + MAX_Y) * 0.5f,   // 0
-        1.0f                      // camera height
-    );
-
-    // Forward direction
-    glm::vec3 forward(1.0f, 0.0f, 0.0f);
-
-    // Upward Axis (Z)
-    glm::vec3 up(0.0f, 0.0f, 1.0f);
-
-    glm::mat4 View = glm::lookAt(
-        cameraPos,
-        cameraPos + forward,
-        up
-    );
-	glm::mat4 Model      = glm::mat4(1.0f);
-	glm::mat4 MVP        = Projection * View * Model;
-
-
-    // -------------------------- GENERAZIONE VETTORI TRASLAZIONE --------------------
-
-    float4* vectorTranslations = (float4*) malloc(NUM_TOT_VOXELS * sizeof(float4));
-    float4* d_vectors;
-    CHECK(cudaMalloc(&d_vectors, NUM_TOT_VOXELS*sizeof(float4)));
-
-    dim3 blockSize(THREAD_BLOCK_SIZE, THREAD_BLOCK_SIZE, THREAD_BLOCK_SIZE);
-    dim3 gridSize(                           
-        (NUM_VOXELS_X + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE,           
-        (NUM_VOXELS_Y + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE,          
-        (NUM_VOXELS_Z + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE        
-    );
-
-    vectorGeneration <<<gridSize, blockSize>>>(d_vectors);
-    CHECK(cudaMemcpy(vectorTranslations, d_vectors, NUM_TOT_VOXELS * sizeof(float4), cudaMemcpyDeviceToHost));
-    CHECK(cudaFree(d_vectors));
-
-    */
-
-
     // -------------------------- SETUP SOCKET COMMUNICATION --------------------
     int server_fd, client_fd;
     struct sockaddr_in addr;
@@ -305,32 +103,59 @@ int main(void) {
     }
     printf("Connected with supplier.\n\n");
 
+    // -------------------------- SOCKET VERSO RENDERER --------------------
+    int renderer_fd;
+    struct sockaddr_in renderer_addr;
+
+    renderer_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (renderer_fd < 0) {
+        perror("Error creating renderer socket");
+        exit(1);
+    }
+
+    renderer_addr.sin_family = AF_INET;
+    renderer_addr.sin_port = htons(RENDERER_PORT);
+    inet_pton(AF_INET, "127.0.0.1", &renderer_addr.sin_addr);
+
+    if (connect(renderer_fd, (struct sockaddr*)&renderer_addr, sizeof(renderer_addr)) < 0) {
+        perror("Error connecting to renderer");
+        exit(1);
+    }
+
+    printf("Connected to renderer on port %d.\n\n", RENDERER_PORT);
+
 
     // ------------------------CUDA STREAMS SETUP -----------------
 
+    // creating the streams
     cudaStream_t h2d, kernel, d2h;
     CHECK(cudaStreamCreate(&h2d));
     CHECK(cudaStreamCreate(&kernel));
     CHECK(cudaStreamCreate(&d2h));
 
+    // creating NUM_BUFFERS buffers to manage multiple frames a time as inputs
     Point* h_pinned_inputs[NUM_BUFFERS];
     Point* d_inputs[NUM_BUFFERS];
+
+    // creating NUM_BUFFERS buffers for output voxels
     int* d_voxels_output[NUM_BUFFERS];
     int* h_voxels_output[NUM_BUFFERS];
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
-        // alloco memoria host pinned sulla ram
+        // alloco memoria host pinned sulla ram per i frame in input
         CHECK(cudaMallocHost((void**)&h_pinned_inputs[i], MAX_POINTS_PER_BUFFER * sizeof(Point)));
-        // alloco memoria host per output voxels
-        CHECK(cudaMallocHost((void**)&h_voxels_output[i], NUM_TOT_VOXELS * sizeof(int)));
-        // alloco memoria device
+        // alloco memoria device per input
         CHECK(cudaMalloc((void**)&d_inputs[i], MAX_POINTS_PER_BUFFER * sizeof(Point)));
+
+        // alloco memoria host pinned per i voxels in output
+        CHECK(cudaMallocHost((void**)&h_voxels_output[i], NUM_TOT_VOXELS * sizeof(int)));
+        // alloco memoria device per output
         CHECK(cudaMalloc((void**)&d_voxels_output[i], NUM_TOT_VOXELS * sizeof(int)));
     }
 
-    cudaEvent_t buffer_input_free_events[NUM_BUFFERS];
-    cudaEvent_t h2d_done_event[NUM_BUFFERS];
-    cudaEvent_t kernel_done_event[NUM_BUFFERS];
+    cudaEvent_t buffer_input_free_events[NUM_BUFFERS]; // one event for each input buffer to signal that the buffer can be overwritten
+    cudaEvent_t h2d_done_event[NUM_BUFFERS]; // one event for each output buffer to signal that the buffer can be overwritten
+    cudaEvent_t kernel_done_event[NUM_BUFFERS]; // one event for each buffer to signal that the kernel has computed the informations inside the input buffer
     cudaEvent_t buffer_output_done_events[NUM_BUFFERS];
     
     for (int i = 0; i < NUM_BUFFERS; i++) { 
@@ -344,7 +169,7 @@ int main(void) {
     }   
 
     int num_points;
-    int i = 0;
+    int i = 0, curr_buffer_sent = 0, count_buffer_sent = 0;
     int current_buffer = 0;
 
     // LOOP RICEZIONE
@@ -363,7 +188,6 @@ int main(void) {
         }
 
         // --- VOXELIZATION ---
-
         if (cudaEventQuery(buffer_input_free_events[current_buffer]) != cudaSuccess) {
             // il buffer input non è ancora libero, aspetto
             CHECK(cudaEventSynchronize(buffer_input_free_events[current_buffer]));
@@ -394,14 +218,31 @@ int main(void) {
         CHECK(cudaMemcpyAsync(h_voxels_output[current_buffer], d_voxels_output[current_buffer], NUM_TOT_VOXELS * sizeof(int), cudaMemcpyDeviceToHost, d2h));
         CHECK(cudaEventRecord(buffer_output_done_events[current_buffer], d2h));
 
-    /*    if (cudaEventQuery(buffer_output_done_events[current_buffer]) == cudaSuccess) {
+       if (cudaEventQuery(buffer_output_done_events[current_buffer]) == cudaSuccess) {
             
-        }   
-    */
+        }
+        // controllo se sono stati lanciati eventi di output_done e in caso positivo li invio sulla socket verso il renderer
+        for (int j = 0; j < NUM_BUFFERS; j++) {
+            if (cudaEventQuery(buffer_output_done_events[current_buffer]))
+        }
+        
+        // Controllo se ci sono dei buffer cpu pronti da inviare e in caso li invio
+        curr_buffer_sent = 0;
+        for (int j=1; j < NUM_BUFFERS + 1; j++) {
+            if (buffer_output_done_events[(count_buffer_sent + j) % NUM_BUFFERS] == cudaSuccess) {
+                send(renderer_fd, h_voxels_output[(count_buffer_sent + j) % NUM_BUFFERS], NUM_TOT_VOXELS * sizeof(int), 0);
+                printf("Inviato buffer %d (%zu bytes) al renderer.\n", buf, total_bytes);
+                curr_buffer_sent++;
+            }
+            else {
+                break;
+            }
+        }
+        count_buffer_sent = (count_buffer_sent + curr_buffer_sent) % NUM_BUFFERS;
+
 
         printf("Voxelization completata per questo frame.\n");
         i++;
-
     }
     
 
