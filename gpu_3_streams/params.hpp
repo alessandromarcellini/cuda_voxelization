@@ -27,6 +27,13 @@
 #define true 1
 #define false 0
 
+struct CallbackData {
+    int socket_fd;       // La tua "data[0]"
+    void* buffer_ptr;    // Il puntatore al buffer da inviare
+    size_t data_size;    // La dimensione in byte (NUM_TOT_VOXELS * sizeof(int))
+    int buffer_id;       // Solo per fare print di debug corretti (opzionale)
+};
+
 typedef struct {
   float x;
   float y;
