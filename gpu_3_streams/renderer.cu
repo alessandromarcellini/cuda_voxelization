@@ -270,6 +270,7 @@ int main() {
     float lastFrameTime = glfwGetTime();
     bool time_to_advance_frame;
     int num_points = 0;
+    bool socket_closed = false;
     int* voxels = (int*) malloc(NUM_TOT_VOXELS * sizeof(int));
     memset(voxels, 0, NUM_TOT_VOXELS * sizeof(int)); // Initialize to zeros
 
@@ -279,7 +280,7 @@ int main() {
         float deltaTime = currentTime - lastFrameTime;
 
         time_to_advance_frame = false;
-        if (deltaTime >= FRAMEDURATION) {
+        if (deltaTime >= FRAMEDURATION && !socket_closed) {
             time_to_advance_frame = true;
             lastFrameTime = currentTime;
         }
@@ -299,8 +300,8 @@ int main() {
                 
                 if (received == 0) {
                     printf("Connessione chiusa dal worker.\n");
+                    socket_closed = true;
                     break;
-                    // to finish
                 }
                 if (received < 0) {
                     perror("Errore recv");
