@@ -266,10 +266,6 @@ int main() {
     }
     printf("Connected with Worker.\n\n");
 
-    // Set client socket to non-blocking mode
-    int flags = fcntl(client_fd, F_GETFL, 0);
-    fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
-
     // -------------------------- RENDER LOOP --------------------
     float lastFrameTime = glfwGetTime();
     bool time_to_advance_frame;
@@ -287,14 +283,33 @@ int main() {
             time_to_advance_frame = true;
             lastFrameTime = currentTime;
         }
-        
-        // ----------------------------UPDATE VOXEL DATA----------------------------
-        if (time_to_advance_frame) {
-            // ricevo voxels e renderizzo
-            int bytes_expected = NUM_TOT_VOXELS * sizeof(int);
-            recv(client_fd, voxels, bytes_expected, 0);
 
+        if (time_to_advance_frame) {
+            
+            // Aggiorno il timer
+            lastFrameTime = currentTime; 
+
+            int bytes_expected = NUM_TOT_VOXELS * sizeof(int);
+            int total_received = 0;
+            char* ptr_buffer = (char*)voxels; // Importante: cast a char* per aritmetica dei puntatori
+
+            // Ciclo finché non ho ricevuto TUTTO il frame
+            while (total_received < bytes_expected) {
+                int received = recv(client_fd, ptr_buffer + total_received, bytes_expected - total_received, 0);
+                
+                if (received == 0) {
+                    printf("Connessione chiusa dal worker.\n");
+                    break;
+                    // to finish
+                }
+                if (received < 0) {
+                    perror("Errore recv");
+                    break;
+                }
+                total_received += received;
+            }
         }
+
 
         //---------------------------- RENDER ----------------------------
         // Clear the screen

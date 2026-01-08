@@ -28,7 +28,7 @@
 
 
 #define PORT 53456
-#define NUM_BUFFERS 2
+#define NUM_BUFFERS 1
 #define THREAD_BLOCK_SIZE 8
 #define MAX_POINTS_PER_BUFFER 131100
 
@@ -193,31 +193,33 @@ int main(void) {
         CHECK(cudaMalloc((void**)&d_voxels_output[i], NUM_TOT_VOXELS * sizeof(int)));
     }
 
+
+
     cudaEvent_t buffer_input_free_events[NUM_BUFFERS];
-    cudaEvent_t h2d_done_event;
-    cudaEvent_t kernel_done_event;
-    cudaEvent_t buffer_output_contains_result_event;
+    cudaEvent_t h2d_done_events[NUM_BUFFERS];          
+    cudaEvent_t buffer_output_contains_result_events[NUM_BUFFERS]; 
     cudaEvent_t buffer_output_free_events[NUM_BUFFERS];
     cudaEvent_t buffer_output_was_sent_events[NUM_BUFFERS];
 
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
-        cudaEventCreateWithFlags(&buffer_input_free_events[i], cudaEventDisableTiming);
-        cudaEventRecord(buffer_input_free_events[i], kernel);
+        CHECK(cudaEventCreateWithFlags(&buffer_input_free_events[i], cudaEventDisableTiming));
+        CHECK(cudaEventCreateWithFlags(&h2d_done_events[i], cudaEventDisableTiming));
+        CHECK(cudaEventCreateWithFlags(&buffer_output_contains_result_events[i], cudaEventDisableTiming));
+        CHECK(cudaEventCreateWithFlags(&buffer_output_free_events[i], cudaEventDisableTiming));
+        CHECK(cudaEventCreateWithFlags(&buffer_output_was_sent_events[i], cudaEventDisableTiming));
 
-        cudaEventCreateWithFlags(&buffer_output_free_events[i], cudaEventDisableTiming);
-        cudaEventRecord(buffer_output_free_events[i], d2h);
-
-        cudaEventCreateWithFlags(&buffer_output_was_sent_events[i], cudaEventDisableTiming);
-        cudaEventRecord(buffer_output_was_sent_events[i], d2h);
+        // Inizializzazione eventi per il primo giro
+        CHECK(cudaEventRecord(buffer_input_free_events[i], kernel));
+        CHECK(cudaEventRecord(buffer_output_free_events[i], d2h));
+        CHECK(cudaEventRecord(buffer_output_was_sent_events[i], d2h));
     }
+
+
 
     int num_points;
     int i = 0, curr_buffer_sent = 0, count_buffer_sent = 0;
     int current_buffer = 0;
-    // A. Allocazione della struttura dati per passare gli argomenti alla callback
-    // Usiamo malloc perché la struct deve sopravvivere fino all'esecuzione della callback
-    struct CallbackData *cb_args = (struct CallbackData *)malloc(sizeof(struct CallbackData));
 
     // -----------------LOOP RICEZIONE----------------------------
     while (recv(client_fd, &num_points, sizeof(int), 0) > 0) { 
@@ -225,71 +227,86 @@ int main(void) {
         current_buffer = i % NUM_BUFFERS;
         printf("Ricevuti %d punti da elaborare.\n", num_points);
         
+
+        if (i >= NUM_BUFFERS) {
+            CHECK(cudaEventSynchronize(h2d_done_events[current_buffer]));
+        }
+        
         int total_received = 0;
         int bytes_expected = num_points * sizeof(Point);
-        while(total_received < bytes_expected) {
+        while(total_received < bytes_expected ) {
             int received = recv(client_fd, (char*)h_pinned_inputs[current_buffer] + total_received, bytes_expected - total_received, 0);
             if (received <= 0) break; // Errore o chiusura
             total_received += received;
         }
 
         // ---------------------- VOXELIZATION ----------------------------
-        cudaStreamWaitEvent(h2d, buffer_input_free_events[current_buffer]);
+        cudaStreamWaitEvent(h2d, buffer_input_free_events[current_buffer], 0);
         CHECK(cudaMemcpyAsync(d_inputs[current_buffer], h_pinned_inputs[current_buffer], num_points * sizeof(Point), cudaMemcpyHostToDevice, h2d));
+        cudaEventRecord(h2d_done_events[current_buffer], h2d);
         
-        cudaEventCreateWithFlags(&h2d_done_event, cudaEventDisableTiming);
-        cudaEventRecord(h2d_done_event, h2d);
-        
-        cudaStreamWaitEvent(kernel, buffer_output_free_events[current_buffer]);
+        cudaStreamWaitEvent(kernel, buffer_output_free_events[current_buffer], 0);
         CHECK(cudaMemsetAsync(d_voxels_output[current_buffer], 0, NUM_TOT_VOXELS * sizeof(int), kernel));
 
-        cudaStreamWaitEvent(kernel, h2d_done_event);
-
+        cudaStreamWaitEvent(kernel, h2d_done_events[current_buffer], 0);
         dim3 blockVox(THREAD_BLOCK_SIZE);
         dim3 gridVox((num_points + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE);
-
         voxelization <<<gridVox, blockVox, 0, kernel>>>(d_inputs[current_buffer], d_voxels_output[current_buffer], num_points);
-        cudaEventCreateWithFlags(&buffer_input_free_events[current_buffer], cudaEventDisableTiming);
+        
         cudaEventRecord(buffer_input_free_events[current_buffer], kernel);
-        cudaEventCreateWithFlags(&buffer_output_contains_result_event, cudaEventDisableTiming);
-        cudaEventRecord(buffer_output_contains_result_event, kernel);
+        cudaEventRecord(buffer_output_contains_result_events[current_buffer], kernel);
 
-
-        cudaStreamWaitEvent(d2h, buffer_output_contains_result_event);
-        cudaStreamWaitEvent(d2h, buffer_output_was_sent_events[current_buffer]);
+        cudaStreamWaitEvent(d2h, buffer_output_contains_result_events[current_buffer], 0);
+        cudaStreamWaitEvent(d2h, buffer_output_was_sent_events[current_buffer], 0);
         CHECK(cudaMemcpyAsync(h_voxels_output[current_buffer], d_voxels_output[current_buffer], NUM_TOT_VOXELS * sizeof(int), cudaMemcpyDeviceToHost, d2h));
-        cudaEventCreateWithFlags(&buffer_output_free_events[current_buffer], cudaEventDisableTiming);
         cudaEventRecord(buffer_output_free_events[current_buffer], d2h);
         // --- INIZIO BLOCCO CALLBACK ---
+
+        // Allocazione della struttura dati per passare gli argomenti alla callback
+        // Usiamo malloc perché la struct deve sopravvivere fino all'esecuzione della callback
+        struct CallbackData *cb_args = (struct CallbackData *)malloc(sizeof(struct CallbackData));
         
         // Riempimento dati (Socket, Puntatore al buffer specifico, Dimensione, ID)
         cb_args->socket_fd = renderer_fd; 
         cb_args->buffer_ptr = h_voxels_output[current_buffer]; 
         cb_args->data_size = NUM_TOT_VOXELS * sizeof(int);
-        cb_args->buffer_id = current_buffer;
+        cb_args->buffer_id = i;
 
         // C. Aggiunta della callback allo stream d2h
         // Quando lo stream arriva qui, eseguirà send_socket passando cb_args
         CHECK(cudaStreamAddCallback(d2h, send_socket, (void*)cb_args, 0));
 
         // --- FINE BLOCCO CALLBACK ---
-        cudaEventCreateWithFlags(&buffer_output_was_sent_events[current_buffer], cudaEventDisableTiming);
         cudaEventRecord(buffer_output_was_sent_events[current_buffer], d2h);
 
         i++;
     }
     
-    free(cb_args);
+    
     CHECK(cudaStreamDestroy(h2d));
     CHECK(cudaStreamDestroy(kernel));
     CHECK(cudaStreamDestroy(d2h));
-    // destroy events
+
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
         CHECK(cudaFreeHost(h_pinned_inputs[i]));
         CHECK(cudaFreeHost(h_voxels_output[i]));
         CHECK(cudaFree(d_inputs[i]));
         CHECK(cudaFree(d_voxels_output[i]));
+
+        // FIX: Distruzione eventi
+        CHECK(cudaEventDestroy(buffer_input_free_events[i]));
+        CHECK(cudaEventDestroy(h2d_done_events[i]));
+        CHECK(cudaEventDestroy(buffer_output_contains_result_events[i]));
+        CHECK(cudaEventDestroy(buffer_output_free_events[i]));
+        CHECK(cudaEventDestroy(buffer_output_was_sent_events[i]));
+
     }   
+
+    close(client_fd);
+    close(server_fd);
+    if(renderer_fd >= 0) close(renderer_fd);
+
+    return 0;
 
 }
