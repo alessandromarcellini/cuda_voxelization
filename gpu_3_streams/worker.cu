@@ -21,12 +21,9 @@
 #include <math.h>
 #include <arpa/inet.h>
 #include <cuda_runtime.h>
-
 #include "params.hpp"
+
 #define RENDERER_PORT 60000
-
-
-
 #define PORT 53456
 #define NUM_BUFFERS 1
 #define THREAD_BLOCK_SIZE 8
@@ -218,8 +215,7 @@ int main(void) {
 
 
     int num_points;
-    int i = 0, curr_buffer_sent = 0, count_buffer_sent = 0;
-    int current_buffer = 0;
+    int i = 0, current_buffer = 0, total_received = 0, bytes_expected = 0;
 
     // -----------------LOOP RICEZIONE----------------------------
     while (recv(client_fd, &num_points, sizeof(int), 0) > 0) { 
@@ -231,9 +227,9 @@ int main(void) {
         if (i >= NUM_BUFFERS) {
             CHECK(cudaEventSynchronize(h2d_done_events[current_buffer]));
         }
-        
-        int total_received = 0;
-        int bytes_expected = num_points * sizeof(Point);
+
+        total_received = 0;
+        bytes_expected = num_points * sizeof(Point);
         while(total_received < bytes_expected ) {
             int received = recv(client_fd, (char*)h_pinned_inputs[current_buffer] + total_received, bytes_expected - total_received, 0);
             if (received <= 0) break; // Errore o chiusura
