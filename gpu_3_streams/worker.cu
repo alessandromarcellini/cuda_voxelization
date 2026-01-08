@@ -44,6 +44,27 @@ do {                                                                    \
 } while (0)
 
 
+void CUDART_CB send_socket(cudaStream_t stream, cudaError_t status, void *data) { // socket, *buffer_to_send
+    printf("Invio del buffer %d al renderer...\n", (count_buffer_sent + j) % NUM_BUFFERS);
+    int buffer_idx = (count_buffer_sent + j) % NUM_BUFFERS;
+    int bytes_to_send = NUM_TOT_VOXELS * sizeof(int);
+    int total_sent = 0;
+    
+    // Ensure all data is sent
+    while (total_sent < bytes_to_send) {
+        int sent = send(renderer_fd, (char*)h_voxels_output[buffer_idx] + total_sent, bytes_to_send - total_sent, 0);
+        printf("Inviati %d bytes.\n", sent);
+
+        if (sent < 0) {
+            perror("Error sending voxel data");
+            break;
+        }
+        total_sent += sent;
+    }
+    printf("Inviato buffer %d (%d bytes) al renderer.\n", buffer_idx, total_sent);
+}
+
+
 __global__ void voxelization(Point* d_input, int* d_output, int num_points) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_points) return;
@@ -153,32 +174,35 @@ int main(void) {
         CHECK(cudaMalloc((void**)&d_voxels_output[i], NUM_TOT_VOXELS * sizeof(int)));
     }
 
-    cudaEvent_t buffer_input_free_events[NUM_BUFFERS]; // one event for each input buffer to signal that the buffer can be overwritten
-    cudaEvent_t h2d_done_event[NUM_BUFFERS]; // one event for each output buffer to signal that the buffer can be overwritten
-    cudaEvent_t kernel_done_event[NUM_BUFFERS]; // one event for each buffer to signal that the kernel has computed the informations inside the input buffer
-    cudaEvent_t buffer_output_done_events[NUM_BUFFERS];
-    
-    for (int i = 0; i < NUM_BUFFERS; i++) { 
-        CHECK(cudaEventCreate(&buffer_input_free_events[i]));
-        CHECK(cudaEventCreate(&buffer_output_done_events[i]));
-        CHECK(cudaEventCreate(&h2d_done_event[i]));
-        CHECK(cudaEventCreate(&kernel_done_event[i]));
-        // inizialmente tutti i buffer sono free
-        CHECK(cudaEventRecord(buffer_input_free_events[i], 0));
-        CHECK(cudaEventRecord(buffer_output_done_events[i], 0));
-    }   
+    cudaEvent_t buffer_input_free_events[NUM_BUFFERS];
+    cudaEvent_t h2d_done_event;
+    cudaEvent_t kernel_done_event;
+    cudaEvent_t buffer_output_contains_result_event;
+    cudaEvent_t buffer_output_free_events[NUM_BUFFERS];
+    cudaEvent_t buffer_output_was_sent_events[NUM_BUFFERS];
+
+
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        cudaEventCreateWithFlags(&buffer_input_free_events[i], cudaEventDisableTiming);
+        cudaEventRecord(buffer_input_free_events[i], kernel);
+
+        cudaEventCreateWithFlags(&buffer_output_free_events[i], cudaEventDisableTiming);
+        cudaEventRecord(buffer_output_free_events[i], d2h);
+
+        cudaEventCreateWithFlags(&buffer_output_was_sent_events[i], cudaEventDisableTiming);
+        cudaEventRecord(buffer_output_was_sent_events[i], d2h);
+    }
 
     int num_points;
     int i = 0, curr_buffer_sent = 0, count_buffer_sent = 0;
     int current_buffer = 0;
 
-    // LOOP RICEZIONE
+    // -----------------LOOP RICEZIONE----------------------------
     while (recv(client_fd, &num_points, sizeof(int), 0) > 0) { 
         
         current_buffer = i % NUM_BUFFERS;
         printf("Ricevuti %d punti da elaborare.\n", num_points);
         
-        // 2. FIX RICEZIONE: Ricevi tutto il blocco in una volta
         int total_received = 0;
         int bytes_expected = num_points * sizeof(Point);
         while(total_received < bytes_expected) {
@@ -187,92 +211,33 @@ int main(void) {
             total_received += received;
         }
 
-        // --- VOXELIZATION ---
-        if (cudaEventQuery(buffer_input_free_events[current_buffer]) != cudaSuccess) {
-            // il buffer input non è ancora libero, aspetto
-            CHECK(cudaEventSynchronize(buffer_input_free_events[current_buffer]));
-        }
-
-        CHECK(cudaMemcpyAsync(d_inputs[current_buffer], h_pinned_inputs[current_buffer], num_points * sizeof(Point), cudaMemcpyHostToDevice, h2d)); 
-        CHECK(cudaEventRecord(h2d_done_event[current_buffer], h2d));
-
-        if (cudaEventQuery(buffer_output_done_events[current_buffer]) != cudaSuccess) {
-            // il buffer output non è ancora libero, aspetto
-            CHECK(cudaEventSynchronize(buffer_output_done_events[current_buffer]));
-
-
-            // PROBLEMAAAA 1
-
-
-            // facendo la event synchronize, l'evento buffer output done viene resettato
-            // quindi quando sotto vado a rifare la cudaEventRecord non vedo più l'evento precedente e non scrivo niente sulla socket
-
-
-            // PROBLEMAAAA 2
-
-            
-            // non dobbiamo usare la event synchronize che rallenta notevolmente l'inserimento di operazioni asincrone negli stream
-            // capire se ricreare un nuovo evento per ogni iterazione del ciclo
-
-        }
-
-        CHECK(cudaMemsetAsync(d_voxels_output[current_buffer], 0, NUM_TOT_VOXELS * sizeof(int), d2h)); 
-
-        dim3 blockVox(THREAD_BLOCK_SIZE);
-        dim3 gridVox((num_points + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE);
+        // ---------------------- VOXELIZATION ----------------------------
+        cudaStreamWaitEvent(h2d, buffer_input_free_events[current_buffer]);
+        CHECK(cudaMemcpyAsync(d_inputs[current_buffer], h_pinned_inputs[current_buffer], num_points * sizeof(Point), cudaMemcpyHostToDevice, h2d));
         
-        if (cudaEventQuery(h2d_done_event[current_buffer]) != cudaSuccess) {
-            // l'host to device non è ancora finito, aspetto
-            CHECK(cudaEventSynchronize(h2d_done_event[current_buffer]));
-        }
+        cudaEventCreateWithFlags(&h2d_done_event, cudaEventDisableTiming);
+        cudaEventRecord(h2d_done_event, h2d);
+        
+        cudaStreamWaitEvent(kernel, buffer_output_free_events[current_buffer]);
+        CHECK(cudaMemsetAsync(d_voxels_output[current_buffer], 0, NUM_TOT_VOXELS * sizeof(int), kernel));
 
+        cudaStreamWaitEvent(kernel, h2d_done_event);
         voxelization <<<gridVox, blockVox, 0, kernel>>>(d_inputs[current_buffer], d_voxels_output[current_buffer], num_points);
-        CHECK(cudaEventRecord(kernel_done_event[current_buffer], kernel));
-        CHECK(cudaEventRecord(buffer_input_free_events[current_buffer], h2d));
+        cudaEventCreateWithFlags(&buffer_input_free_events[current_buffer], cudaEventDisableTiming);
+        cudaEventRecord(buffer_input_free_events[current_buffer], kernel);
+        cudaEventCreateWithFlags(&buffer_output_contains_result_event, cudaEventDisableTiming);
+        cudaEventRecord(buffer_output_contains_result_event, kernel);
 
-        if (cudaEventQuery(kernel_done_event[current_buffer]) != cudaSuccess) {
-            // il kernel non è ancora finito, aspetto
-            CHECK(cudaEventSynchronize(kernel_done_event[current_buffer]));
-        }
 
+        cudaStreamWaitEvent(d2h, buffer_output_contains_result_event);
+        cudaStreamWaitEvent(d2h, buffer_h_output_was_sent_events[current_buffer]);
         CHECK(cudaMemcpyAsync(h_voxels_output[current_buffer], d_voxels_output[current_buffer], NUM_TOT_VOXELS * sizeof(int), cudaMemcpyDeviceToHost, d2h));
-        CHECK(cudaEventRecord(buffer_output_done_events[current_buffer], d2h));
-        
-        // Controllo se ci sono dei buffer cpu pronti da inviare e in caso li invio
-        curr_buffer_sent = 0;
-        for (int j=1; j < NUM_BUFFERS + 1; j++) {
-            if (cudaEventQuery(buffer_output_done_events[(count_buffer_sent + j) % NUM_BUFFERS]) == cudaSuccess) {
-                
+        cudaEventCreateWithFlags(&buffer_output_free_events[current_buffer], cudaEventDisableTiming);
+        cudaEventRecord(buffer_output_free_events[current_buffer], d2h);
+        // callback per la send su socket
+        cudaEventCreateWithFlags(&buffer_output_was_sent_events[current_buffer], cudaEventDisableTiming);
+        cudaEventRecord(buffer_output_was_sent_events[current_buffer], d2h);
 
-                //NON ENTRA MAI IN QUESTO RAMO
-                printf("Invio del buffer %d al renderer...\n", (count_buffer_sent + j) % NUM_BUFFERS);
-
-                int buffer_idx = (count_buffer_sent + j) % NUM_BUFFERS;
-                int bytes_to_send = NUM_TOT_VOXELS * sizeof(int);
-                int total_sent = 0;
-                
-                // Ensure all data is sent
-                while (total_sent < bytes_to_send) {
-                    int sent = send(renderer_fd, (char*)h_voxels_output[buffer_idx] + total_sent, bytes_to_send - total_sent, 0);
-                    printf("Inviati %d bytes.\n", sent);
-
-                    if (sent < 0) {
-                        perror("Error sending voxel data");
-                        break;
-                    }
-                    total_sent += sent;
-                }
-                printf("Inviato buffer %d (%d bytes) al renderer.\n", buffer_idx, total_sent);
-                curr_buffer_sent++;
-            }
-            else {
-                break;
-            }
-        }
-        count_buffer_sent = (count_buffer_sent + curr_buffer_sent) % NUM_BUFFERS;
-
-
-        printf("Voxelization completata per questo frame.\n");
         i++;
     }
     
