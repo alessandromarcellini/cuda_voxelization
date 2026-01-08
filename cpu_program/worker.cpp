@@ -12,8 +12,6 @@
 #define RENDERER_PORT 60000
 
 
-
-
 int compare_names(const void* a, const void* b) {
     const char* name_a = *(const char**)a;
     const char* name_b = *(const char**)b;
@@ -33,6 +31,21 @@ VoxelIndices calculate_voxel_indices(Point point) {
     result.j = (int)floor((point.y - MIN_Y) / DIM_VOXEL);
     result.k = (int)floor((point.z - MIN_Z) / DIM_VOXEL);
     return result;
+}
+
+
+void reset_voxels(Voxel* voxels) {
+    for (int i = 0; i < NUM_VOXELS_X; i++) {
+        for (int j = 0; j < NUM_VOXELS_Y; j++) {
+            for (int k = 0; k < NUM_VOXELS_Z; k++) {
+                int linear_idx = i * (NUM_VOXELS_Y * NUM_VOXELS_Z) + j * NUM_VOXELS_Z + k;
+                voxels[linear_idx].num_points = 0;
+                voxels[linear_idx].x = i;
+                voxels[linear_idx].y = j;
+                voxels[linear_idx].z = k;
+            }
+        }
+    }
 }
 
 
@@ -90,7 +103,10 @@ int main(void) {
     printf("Connected to renderer on port %d.\n\n", RENDERER_PORT);
 
     // -------------------------- SETUP VOXELS --------------------------
-    int* voxels = (int*) calloc(NUM_TOT_VOXELS, sizeof(int)); // 1D voxel array
+    Voxel* voxels = (Voxel*) malloc(NUM_TOT_VOXELS * sizeof(Voxel)); // 1D voxel array
+
+    reset_voxels(voxels);
+
     if (!voxels) {
         perror("Failed to allocate voxel array");
         exit(1);
@@ -104,9 +120,12 @@ int main(void) {
     
     // FOR EACH FRAME VOXELIZE THE POINT CLOUD
     int num_points = 0;
+    int j = 0;
     while (recv(client_fd, &num_points, sizeof(int), 0) > 0) {
         //reset voxels matrix to all zeros
-        memset(voxels, 0, NUM_TOT_VOXELS * sizeof(int));
+        for (int e = 0; e < NUM_TOT_VOXELS; e++) {
+            voxels[e].num_points = 0;
+        }
         curr_points = (Point*) malloc(num_points * sizeof(Point));
 
 
@@ -131,25 +150,31 @@ int main(void) {
                     continue;
             }
 
-            voxels[VOXEL_INDEX(idx.i, idx.j, idx.k)]++;
+            voxels[VOXEL_INDEX(idx.i, idx.j, idx.k)].num_points++;
         }
 
         // send voxel array to renderer
-        size_t bytes_to_send = NUM_TOT_VOXELS * sizeof(int);
+        size_t bytes_to_send = NUM_TOT_VOXELS * sizeof(Voxel);
         size_t total_sent = 0;
         while (total_sent < bytes_to_send) {
-            ssize_t sent = send(renderer_fd, ((char*)voxels) + total_sent, bytes_to_send - total_sent, 0);
+            printf("ENTERED\n");
+            ssize_t sent = send(renderer_fd, ((char*) voxels) + total_sent, bytes_to_send - total_sent, 0);
             if (sent < 0) {
                 perror("Error sending voxel data");
                 break;
             }
             total_sent += sent;
         }
+        printf("MANDATI VOXELS %d\n", j);
+        j++;
 
         free(curr_points);
 
     }
     free(voxels);
+    close(client_fd);
+    close(server_fd);
+    close(renderer_fd);
 
 	return 0;
 }

@@ -240,8 +240,8 @@ int main() {
     bool time_to_advance_frame;
     int num_points = 0;
     bool socket_closed = false;
-    int* voxels = (int*) malloc(NUM_TOT_VOXELS * sizeof(int));
-    memset(voxels, 0, NUM_TOT_VOXELS * sizeof(int)); // Initialize to zeros
+    Voxel* voxels = (Voxel*) malloc(NUM_TOT_VOXELS * sizeof(Voxel));
+    memset(voxels, 0, NUM_TOT_VOXELS * sizeof(Voxel));
 
     do {
         //--------------------CHECK IF IT'S TIME TO UPDATE---------------------------
@@ -258,7 +258,7 @@ int main() {
             // Aggiorno il timer
             lastFrameTime = currentTime; 
 
-            int bytes_expected = NUM_TOT_VOXELS * sizeof(int);
+            int bytes_expected = NUM_TOT_VOXELS * sizeof(Voxel);
             int total_received = 0;
             char* ptr_buffer = (char*)voxels; // Importante: cast a char* per aritmetica dei puntatori
 
@@ -305,12 +305,12 @@ int main() {
 
         //---------------------render current voxels-------------------------------
         for (int i = 0; i < NUM_TOT_VOXELS; i++) {
-            if (voxels[i] > MIN_POINTS_IN_VOXEL_TO_RENDER) {
+            if (voxels[i].num_points > MIN_POINTS_IN_VOXEL_TO_RENDER) {
                 //render it
 
-                int x = i / (NUM_VOXELS_Y * NUM_VOXELS_Z); // try this out
-                int y = (i / NUM_VOXELS_Z) % NUM_VOXELS_Y;
-                int z = i % NUM_VOXELS_Z;
+                int x = voxels[i].x;
+                int y = voxels[i].y;
+                int z = voxels[i].z;
 
                 glm::vec3 t = voxelTranslationVectors[x][y][z];
 

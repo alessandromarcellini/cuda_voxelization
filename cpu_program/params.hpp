@@ -39,3 +39,10 @@ typedef struct {
   int j;
   int k;
 } VoxelIndices;
+
+typedef struct {
+  int x;
+  int y;
+  int z;
+  int num_points;
+} Voxel;
