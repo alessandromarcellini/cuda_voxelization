@@ -240,8 +240,8 @@ int main() {
     bool time_to_advance_frame;
     int num_points = 0;
     bool socket_closed = false;
-    Voxel* voxels = (Voxel*) malloc(NUM_TOT_VOXELS * sizeof(Voxel));
-    memset(voxels, 0, NUM_TOT_VOXELS * sizeof(Voxel));
+    Voxel* active_voxels;
+    int active_count = 0;
 
     do {
         //--------------------CHECK IF IT'S TIME TO UPDATE---------------------------
@@ -258,11 +258,21 @@ int main() {
             // Aggiorno il timer
             lastFrameTime = currentTime; 
 
-            int bytes_expected = NUM_TOT_VOXELS * sizeof(Voxel);
-            int total_received = 0;
-            char* ptr_buffer = (char*)voxels; // Importante: cast a char* per aritmetica dei puntatori
+            active_count = 0;
+            int received_count = recv(client_fd, &active_count, sizeof(int), 0);
+            
+            if (received_count <= 0) {
+                printf("Connessione chiusa o errore.\n");
+                socket_closed = true;
+                break;
+            }
 
-            // Ciclo finché non ho ricevuto TUTTO il frame
+            active_voxels = (Voxel*) malloc(active_count * sizeof(Voxel));
+
+            int bytes_expected = active_count * sizeof(Voxel);
+            int total_received = 0;
+            char* ptr_buffer = (char*)active_voxels; // Importante: cast a char* per aritmetica dei puntatori   
+            
             while (total_received < bytes_expected) {
                 int received = recv(client_fd, ptr_buffer + total_received, bytes_expected - total_received, 0);
                 
@@ -304,13 +314,13 @@ int main() {
         );
 
         //---------------------render current voxels-------------------------------
-        for (int i = 0; i < NUM_TOT_VOXELS; i++) {
-            if (voxels[i].num_points > MIN_POINTS_IN_VOXEL_TO_RENDER) {
+        for (int i = 0; i < active_count; i++) {
+            if (active_voxels[i].num_points > MIN_POINTS_IN_VOXEL_TO_RENDER) {
                 //render it
 
-                int x = voxels[i].x;
-                int y = voxels[i].y;
-                int z = voxels[i].z;
+                int x = active_voxels[i].x;
+                int y = active_voxels[i].y;
+                int z = active_voxels[i].z;
 
                 glm::vec3 t = voxelTranslationVectors[x][y][z];
 
@@ -334,7 +344,6 @@ int main() {
 		   glfwWindowShouldClose(window) == 0 );
 
 	// Cleanup VBO
-    free(voxels);
 	glDeleteBuffers(1, &vertexbuffer);
 	glDeleteVertexArrays(1, &VertexArrayID);
 	glDeleteProgram(programID);
@@ -346,6 +355,8 @@ int main() {
         free(voxelTranslationVectors[x]);
     }
     free(voxelTranslationVectors);
+
+    free(active_voxels);
 
 	// Close OpenGL window and terminate GLFW
 	glfwTerminate();

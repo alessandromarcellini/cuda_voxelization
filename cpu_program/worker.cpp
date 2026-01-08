@@ -104,6 +104,8 @@ int main(void) {
 
     // -------------------------- SETUP VOXELS --------------------------
     Voxel* voxels = (Voxel*) malloc(NUM_TOT_VOXELS * sizeof(Voxel)); // 1D voxel array
+    Voxel* active_voxels = (Voxel*) malloc(NUM_TOT_VOXELS * sizeof(Voxel)); 
+    int active_count = 0;
 
     reset_voxels(voxels);
 
@@ -120,7 +122,7 @@ int main(void) {
     
     // FOR EACH FRAME VOXELIZE THE POINT CLOUD
     int num_points = 0;
-    int j = 0;
+
     while (recv(client_fd, &num_points, sizeof(int), 0) > 0) {
         //reset voxels matrix to all zeros
         for (int e = 0; e < NUM_TOT_VOXELS; e++) {
@@ -132,7 +134,7 @@ int main(void) {
         //recv points of current frame point cloud
         int total_received = 0;
         int bytes_expected = num_points * sizeof(Point);
-        while(total_received < bytes_expected ) {
+        while(total_received < bytes_expected) {
             int received = recv(client_fd, (char*) curr_points + total_received, bytes_expected - total_received, 0);
             if (received <= 0) break; // Errore o chiusura
             total_received += received;
@@ -153,24 +155,38 @@ int main(void) {
             voxels[VOXEL_INDEX(idx.i, idx.j, idx.k)].num_points++;
         }
 
-        // send voxel array to renderer
-        size_t bytes_to_send = NUM_TOT_VOXELS * sizeof(Voxel);
-        size_t total_sent = 0;
+        
+        // send voxel array "ripulito" to renderer
+
+        active_count = 0;
+
+        for (int i = 0; i < NUM_TOT_VOXELS; i++) {
+            if (voxels[i].num_points > MIN_POINTS_IN_VOXEL_TO_RENDER) {
+                active_voxels[active_count] = voxels[i];
+                active_count++;
+            }
+        }
+
+        printf("Invio %d voxel attivi su %d totali.\n", active_count, NUM_TOT_VOXELS);
+        send(renderer_fd, &active_count, sizeof(int), 0);
+
+        int bytes_to_send = active_count * sizeof(Voxel);
+        int total_sent = 0;
         while (total_sent < bytes_to_send) {
-            printf("ENTERED\n");
-            ssize_t sent = send(renderer_fd, ((char*) voxels) + total_sent, bytes_to_send - total_sent, 0);
+    
+            int sent = send(renderer_fd, ((char*) active_voxels) + total_sent, bytes_to_send - total_sent, 0);
             if (sent < 0) {
                 perror("Error sending voxel data");
                 break;
             }
             total_sent += sent;
         }
-        printf("MANDATI VOXELS %d\n", j);
-        j++;
 
+        
         free(curr_points);
-
     }
+    
+    free(active_voxels);
     free(voxels);
     close(client_fd);
     close(server_fd);
