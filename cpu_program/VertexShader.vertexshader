@@ -1,0 +1,19 @@
+#version 330 core
+
+layout(location = 0) in vec3 vertexPosition_modelspace;
+layout(location = 1) in vec3 vertexNormal; // Prima era vertexColor
+
+out vec3 Normal;
+out vec3 FragPos;
+
+uniform mat4 MVP;
+uniform mat4 Model; // Ci serve per ruotare le normali se ruoti i cubi (opzionale qui, ma buona pratica)
+
+void main(){
+    gl_Position = MVP * vec4(vertexPosition_modelspace, 1.0);
+    
+    // Passiamo la normale e la posizione al fragment shader per la luce
+    // Nota: se non scali in modo non uniforme, mat3(Model) va bene per le normali
+    Normal = mat3(Model) * vertexNormal; 
+    FragPos = vec3(Model * vec4(vertexPosition_modelspace, 1.0));
+}

@@ -11,7 +11,7 @@
 
 #define PORT 53456
 
-#define DIM_VOXEL 0.1
+#define DIM_VOXEL 0.1f
 
 #define NUM_VOXELS_X ((int)((MAX_X - MIN_X)/DIM_VOXEL))
 #define NUM_VOXELS_Y ((int)((MAX_Y - MIN_Y)/DIM_VOXEL))

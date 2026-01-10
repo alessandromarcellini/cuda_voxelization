@@ -11,6 +11,7 @@
 #include "opengl.hpp"
 #include "params.hpp"
 
+#define MAX_DENSITY_THRESHOLD 7.5f
 #define PORT 60000 // todo mettila in params come renderer_port
 
 
@@ -59,15 +60,18 @@ int main() {
 	// Ensure we can capture the escape key being pressed below
 	glfwSetInputMode(window, GLFW_STICKY_KEYS, GL_TRUE);
     // ---------------------------------------------------------------- Dark blue background
-	glClearColor(0.0f, 0.0f, 0.4f, 0.0f);
+    glClearColor(0.15f, 0.15f, 0.15f, 1.0f);
+
 
 	GLuint VertexArrayID;
 	glGenVertexArrays(1, &VertexArrayID);
 	glBindVertexArray(VertexArrayID);
 
 	// -----------------------------------------------------------------Create and compile our GLSL program from the shaders
-	GLuint programID = LoadShaders( "../opengl_cubes_test/SimpleVertexShader.vertexshader", "../opengl_cubes_test/SimpleFragmentShader.fragmentshader" );
-
+	GLuint programID = LoadShaders( "../cpu_program/VertexShader.vertexshader", "../cpu_program/FragmentShader.fragmentshader" );
+    GLuint MatrixID = glGetUniformLocation(programID, "MVP");
+    GLuint ModelMatrixID = glGetUniformLocation(programID, "Model"); 
+    GLuint DensityID = glGetUniformLocation(programID, "voxelDensity");
 
 	// The vertices. Three consecutive floats give a 3D vertex; Three consecutive vertices give a triangle.
 	// A cube has 6 faces with 2 triangles each, so this makes 6*2=12 triangles, and 12*3 vertices
@@ -110,37 +114,33 @@ int main() {
 		1.0f,-1.0f, 1.0f
 	};
 
-	// Vertices colors
-	// One color for each vertex
-    float faceGray[6] = {
-        0.85f, // face 0 (lighter)
-        0.70f,
-        0.55f,
-        0.40f,
-        0.65f,
-        0.50f  // face 5 (darker)
+	// Vertices colors based to Normal
+    // Dati delle Normali (1 normale per ogni vertice, 6 facce x 2 triangoli x 3 vertici)
+    static const GLfloat g_normal_buffer_data[] = {
+        // Faccia Z- (Back)
+        0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f,
+        0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f,
+        // Faccia Z+ (Front)
+        0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f,
+        0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f,
+        // Faccia X- (Left)
+        -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f,
+        -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f,
+        // Faccia X+ (Right)
+        1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+        1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+        // Faccia Y- (Bottom)
+        0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f,
+        0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f,
+        // Faccia Y+ (Top)
+        0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f
     };
 
-    std::vector<GLfloat> g_color_buffer_data;
-    g_color_buffer_data.reserve(36 * 3); // 36 vertices RGB
-    for (int face = 0; face < 6; face++) {
-        float gray = faceGray[face];
-        for (int v = 0; v < 6; v++) {
-            g_color_buffer_data.push_back(gray); // R
-            g_color_buffer_data.push_back(gray); // G
-            g_color_buffer_data.push_back(gray); // B
-        }
-    }
-
-    GLuint colorbuffer;
-	glGenBuffers(1, &colorbuffer);
-	glBindBuffer(GL_ARRAY_BUFFER, colorbuffer);
-    glBufferData(
-        GL_ARRAY_BUFFER,
-        g_color_buffer_data.size() * sizeof(float),
-        g_color_buffer_data.data(),
-        GL_STATIC_DRAW
-    );
+    GLuint normalbuffer;
+    glGenBuffers(1, &normalbuffer);
+    glBindBuffer(GL_ARRAY_BUFFER, normalbuffer);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(g_normal_buffer_data), g_normal_buffer_data, GL_STATIC_DRAW);
 
 	GLuint vertexbuffer;
 	glGenBuffers(1, &vertexbuffer);
@@ -163,6 +163,7 @@ int main() {
         1.0f                      // camera height
     );
 
+
     // Forward direction
     glm::vec3 forward(1.0f, 0.0f, 0.0f);
 
@@ -176,6 +177,8 @@ int main() {
     );
 	glm::mat4 Model      = glm::mat4(1.0f);
 	glm::mat4 MVP        = Projection * View * Model;
+
+    
 
     // --------------------------SETUP TRANSLATION VECTORS--------------------
     // initializing rendering voxel space
@@ -306,9 +309,9 @@ int main() {
             0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0
         );
 
-        // 2nd attribute buffer : colors
+        // 2nd attribute buffer : normals
         glEnableVertexAttribArray(1);
-        glBindBuffer(GL_ARRAY_BUFFER, colorbuffer);
+        glBindBuffer(GL_ARRAY_BUFFER, normalbuffer); // Usa normalbuffer!
         glVertexAttribPointer(
             1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0
         );
@@ -322,12 +325,27 @@ int main() {
                 int y = active_voxels[i].y;
                 int z = active_voxels[i].z;
 
+                // Calcolo posizione
                 glm::vec3 t = voxelTranslationVectors[x][y][z];
 
+                // Calcolo Model Matrix
                 glm::mat4 Model1 = glm::translate(glm::mat4(1.0f), t);
                 Model1 = glm::scale(Model1, glm::vec3(DIM_VOXEL / 2.0f));
+                
+                // Calcolo MVP
                 glm::mat4 MVP1 = Projection * View * Model1;
+
+                // INVIO UNIFORM ALLO SHADER
+                // 1. MVP per la posizione dei vertici
                 glUniformMatrix4fv(MatrixID, 1, GL_FALSE, &MVP1[0][0]);
+                
+                // 2. Model Matrix per il calcolo delle luci
+                glUniformMatrix4fv(ModelMatrixID, 1, GL_FALSE, &Model1[0][0]);
+
+                // 3. Densità per il colore (Heatmap)
+                float density = (float)active_voxels[i].num_points / (float)MAX_DENSITY_THRESHOLD;
+                glUniform1f(DensityID, density);
+
                 glDrawArrays(GL_TRIANGLES, 0, 12*3);
             }
         }

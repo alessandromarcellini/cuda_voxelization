@@ -1,0 +1,58 @@
+#version 330 core
+
+in vec3 Normal;
+in vec3 FragPos;
+
+out vec4 color;
+
+uniform float voxelDensity; // Valore tra 0.0 e 1.0
+
+vec3 getHeatmapColor(float t) {
+    // Definizione dei colori "Aggressivi"
+    vec3 color0 = vec3(0.0, 0.0, 0.2); // 0.0: Blu Notte profondo (Sfondo)
+    vec3 color1 = vec3(0.6, 0.0, 0.0); // 0.33: Rosso Sangue
+    vec3 color2 = vec3(1.0, 0.5, 0.0); // 0.66: Arancione vivo
+    vec3 color3 = vec3(1.0, 1.0, 0.8); // 1.0: Bianco/Giallo accecante (Nucleo)
+
+    vec3 finalColor;
+
+    // Interpolazione a 3 stadi
+    if (t < 0.33) {
+        // Da Blu a Rosso (rimappa t da 0.0-0.33 a 0.0-1.0)
+        finalColor = mix(color0, color1, t * 3.0);
+    } 
+    else if (t < 0.66) {
+        // Da Rosso a Arancione
+        finalColor = mix(color1, color2, (t - 0.33) * 3.0);
+    } 
+    else {
+        // Da Arancione a Bianco
+        finalColor = mix(color2, color3, (t - 0.66) * 3.0);
+    }
+    
+    return finalColor;
+}
+
+
+void main(){
+
+    float t = clamp(voxelDensity, 0.0, 1.0);
+    // t = pow(t, 1.2);
+
+    vec3 objectColor = getHeatmapColor(t);
+
+    // 2. CALCOLO DELLA LUCE
+    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5)); 
+    vec3 norm = normalize(Normal);
+    
+    // DIFFUSIONE OMBRE (Lambert)
+    float diff = max(dot(norm, lightDir), 0.0);
+    
+    // LUCE AMBIENTE (luce base per non avere neri totali)
+    float ambient = 0.3;
+    
+    vec3 result = (ambient + diff) * objectColor;
+
+    // Output con alpha fisso (o variabile se vuoi trasparenza)
+    color = vec4(result, 0.3 + voxelDensity * 0.7); 
+}
