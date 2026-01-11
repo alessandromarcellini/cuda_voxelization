@@ -257,6 +257,8 @@ int main() {
             lastFrameTime = currentTime;
         }
 
+        printf("Frame Rate: %.4f /seconds. ", 1.0/deltaTime);
+
         if (time_to_advance_frame) {
             // Aggiorno il timer
             lastFrameTime = currentTime; 

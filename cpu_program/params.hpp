@@ -21,7 +21,7 @@
 
 #define DIRNAME "../new_dataset"
 
-#define FRAMEDURATION 1.0f // 10 FPS
+#define FRAMEDURATION 0.0f // 10 FPS
 
 #define WINDOWNAME "CPU Voxelization"
 
