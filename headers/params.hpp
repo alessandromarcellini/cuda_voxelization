@@ -15,7 +15,7 @@
 #define WORKER_PORT 53456
 #define RENDERER_PORT 60000
 
-#define DIM_VOXEL 0.1f
+#define DIM_VOXEL 0.2f
 
 #define NUM_VOXELS_X ((int)((MAX_X - MIN_X)/DIM_VOXEL))
 #define NUM_VOXELS_Y ((int)((MAX_Y - MIN_Y)/DIM_VOXEL))
@@ -25,7 +25,7 @@
 
 #define DIRNAME "../new_dataset"
 
-#define FRAMEDURATION 1.0f // 10 FPS
+#define FRAMEDURATION 0.0f // 10 FPS
 
 #define WINDOWNAME "GPU Voxelization"
 
@@ -54,6 +54,6 @@ typedef struct {
 struct CallbackData {
     int socket_fd;       // La tua "data[0]"
     void* buffer_ptr;    // Il puntatore al buffer da inviare
-    size_t data_size;    // La dimensione in byte (NUM_TOT_VOXELS * sizeof(int))
+    int active_count;    // Numero di voxel attivi nel buffer
     int buffer_id;       // Solo per fare print di debug corretti (opzionale)
 };
