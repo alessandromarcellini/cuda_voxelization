@@ -25,6 +25,10 @@
 
 #define THREAD_BLOCK_SIZE 8
 
+#define THREAD_BLOCK_SIZE_1D 256
+#define THREAD_BLOCK_SIZE_3D 8
+
+
 #define CHECK(call)                                                     \
 do {                                                                    \
     const cudaError_t error = call;                                     \
@@ -77,7 +81,7 @@ void CUDART_CB send_socket(cudaStream_t stream, cudaError_t status, void *data) 
     free(args);
 }
 
-__global__ void voxelization(Point* d_input, int* d_output, int num_points) {
+__global__ void voxelization(Point* d_input, Voxel* d_output, Voxel* d_active_voxels, int num_points) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_points) return;
 
@@ -98,7 +102,50 @@ __global__ void voxelization(Point* d_input, int* d_output, int num_points) {
     // calcolo indice array lineare voxel
     int voxel_idx = curr_voxel_z * (NUM_VOXELS_X* NUM_VOXELS_Y) + curr_voxel_y * NUM_VOXELS_X + curr_voxel_x;
     
-    atomicAdd(&d_output[voxel_idx], 1); 
+    atomicAdd(&d_output[voxel_idx].num_points, 1);
+
+    //TODO exctract active voxels qui??????
+}
+
+
+__global__ void extract_active_voxels(Voxel* d_voxels, Voxel* d_active_voxels, int* d_num_active_voxels) { // TODO warp divergence
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= NUM_TOT_VOXELS) return;
+
+    int curr_voxel_final_num_points = d_voxels[idx].num_points;
+    if (curr_voxel_final_num_points > MIN_POINTS_IN_VOXEL_TO_RENDER) {
+        int out_idx = atomicAdd(d_num_active_voxels, 1);
+        d_active_voxels[out_idx] = d_voxels[idx];
+    }
+}
+
+__global__ void setup_voxels(Voxel* voxels) {
+
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int z = blockIdx.z * blockDim.z + threadIdx.z;
+
+    if (x >= NUM_VOXELS_X ||
+        y >= NUM_VOXELS_Y ||
+        z >= NUM_VOXELS_Z)
+        return;
+
+    int idx = z * (NUM_VOXELS_X * NUM_VOXELS_Y)
+            + y * NUM_VOXELS_X
+            + x;
+
+    voxels[idx].x = x;
+    voxels[idx].y = y;
+    voxels[idx].z = z;
+    voxels[idx].num_points = 0;
+}
+
+
+__global__ void reset_voxels(Voxel* voxels) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= NUM_TOT_VOXELS) return;
+
+    voxels[idx].num_points = 0;
 }
 
 
@@ -171,8 +218,16 @@ int main(void) {
     Point* d_inputs[NUM_BUFFERS];
 
     // creating NUM_BUFFERS buffers for output voxels
-    int* d_voxels_output[NUM_BUFFERS];
-    int* h_voxels_output[NUM_BUFFERS];
+    Voxel* d_voxels_output[NUM_BUFFERS];
+    Voxel* h_voxels_output[NUM_BUFFERS];
+
+    // creating buffers to host active voxels on GPU
+    Voxel* d_active_voxels[NUM_BUFFERS];
+    int*   d_num_active_voxels[NUM_BUFFERS];
+
+    // creating buffers to host active voxels on CPU
+    Voxel* h_active_voxels[NUM_BUFFERS];
+    int    h_num_active_voxels[NUM_BUFFERS];
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
         // alloco memoria host pinned sulla ram per i frame in input
@@ -181,9 +236,23 @@ int main(void) {
         CHECK(cudaMalloc((void**)&d_inputs[i], MAX_POINTS_PER_BUFFER * sizeof(Point)));
 
         // alloco memoria host pinned per i voxels in output
-        CHECK(cudaMallocHost((void**)&h_voxels_output[i], NUM_TOT_VOXELS * sizeof(int)));
+        CHECK(cudaMallocHost((void**)&h_voxels_output[i], NUM_TOT_VOXELS * sizeof(Voxel)));
         // alloco memoria device per output
-        CHECK(cudaMalloc((void**)&d_voxels_output[i], NUM_TOT_VOXELS * sizeof(int)));
+        CHECK(cudaMalloc((void**)&d_voxels_output[i], NUM_TOT_VOXELS * sizeof(Voxel)));
+
+        dim3 blockSetupVoxels(THREAD_BLOCK_SIZE_3D, THREAD_BLOCK_SIZE_3D, THREAD_BLOCK_SIZE_3D);
+        dim3 gridSetupVoxels(
+            (NUM_VOXELS_X + blockSetupVoxels.x - 1) / blockSetupVoxels.x,
+            (NUM_VOXELS_Y + blockSetupVoxels.y - 1) / blockSetupVoxels.y,
+            (NUM_VOXELS_Z + blockSetupVoxels.z - 1) / blockSetupVoxels.z
+        );
+        setup_voxels <<< gridSetupVoxels, blockSetupVoxels, 0, 0 >>>(d_voxels_output[i]);
+
+        //alloco memoria per contatori e voxel attivi
+        CHECK(cudaMalloc((void**)&d_active_voxels[i], NUM_TOT_VOXELS * sizeof(Voxel)));
+        CHECK(cudaMalloc((void**)&d_num_active_voxels[i], sizeof(int)));
+
+        CHECK(cudaMallocHost((void**)&h_active_voxels[i], NUM_TOT_VOXELS * sizeof(Voxel)));
     }
 
 
@@ -191,7 +260,8 @@ int main(void) {
     cudaEvent_t buffer_input_free_events[NUM_BUFFERS];
     cudaEvent_t h2d_done_events[NUM_BUFFERS];          
     cudaEvent_t buffer_output_contains_result_events[NUM_BUFFERS]; 
-    cudaEvent_t buffer_output_free_events[NUM_BUFFERS];
+    cudaEvent_t buffer_output_active_voxels_free_events[NUM_BUFFERS];
+    cudaEvent_t buffer_output_voxels_free_events[NUM_BUFFERS];    
     cudaEvent_t buffer_output_was_sent_events[NUM_BUFFERS];
 
 
@@ -199,12 +269,14 @@ int main(void) {
         CHECK(cudaEventCreateWithFlags(&buffer_input_free_events[i], cudaEventDisableTiming));
         CHECK(cudaEventCreateWithFlags(&h2d_done_events[i], cudaEventDisableTiming));
         CHECK(cudaEventCreateWithFlags(&buffer_output_contains_result_events[i], cudaEventDisableTiming));
-        CHECK(cudaEventCreateWithFlags(&buffer_output_free_events[i], cudaEventDisableTiming));
+        CHECK(cudaEventCreateWithFlags(&buffer_output_active_voxels_free_events[i], cudaEventDisableTiming));
+        CHECK(cudaEventCreateWithFlags(&buffer_output_voxels_free_events[i], cudaEventDisableTiming));
         CHECK(cudaEventCreateWithFlags(&buffer_output_was_sent_events[i], cudaEventDisableTiming));
 
         // Inizializzazione eventi per il primo giro
         CHECK(cudaEventRecord(buffer_input_free_events[i], kernel));
-        CHECK(cudaEventRecord(buffer_output_free_events[i], d2h));
+        CHECK(cudaEventRecord(buffer_output_active_voxels_free_events[i], d2h));
+        CHECK(cudaEventRecord(buffer_output_voxels_free_events[i], d2h));
         CHECK(cudaEventRecord(buffer_output_was_sent_events[i], d2h));
     }
 
@@ -237,21 +309,59 @@ int main(void) {
         CHECK(cudaMemcpyAsync(d_inputs[current_buffer], h_pinned_inputs[current_buffer], num_points * sizeof(Point), cudaMemcpyHostToDevice, h2d));
         cudaEventRecord(h2d_done_events[current_buffer], h2d);
         
-        cudaStreamWaitEvent(kernel, buffer_output_free_events[current_buffer], 0);
-        CHECK(cudaMemsetAsync(d_voxels_output[current_buffer], 0, NUM_TOT_VOXELS * sizeof(int), kernel));
+        cudaStreamWaitEvent(kernel, buffer_output_voxels_free_events[current_buffer], 0);
+
+        dim3 blockResetVoxels(THREAD_BLOCK_SIZE_1D);
+        dim3 gridResetVoxels((NUM_TOT_VOXELS + block.x - 1) / block.x);
+        reset_voxels<<<gridResetVoxels, blockResetVoxels, 0, kernel>>>(d_voxels_output[current_buffer]);
 
         cudaStreamWaitEvent(kernel, h2d_done_events[current_buffer], 0);
         dim3 blockVox(THREAD_BLOCK_SIZE);
         dim3 gridVox((num_points + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE);
         voxelization <<<gridVox, blockVox, 0, kernel>>>(d_inputs[current_buffer], d_voxels_output[current_buffer], num_points);
-        
         cudaEventRecord(buffer_input_free_events[current_buffer], kernel);
+        // -------------------------------------------------------------
+        // azzera contatore voxel attivi
+        cudaStreamWaitEvent(kernel, buffer_output_active_voxels_free_events[current_buffer], 0);
+        CHECK(cudaMemsetAsync(d_num_active_voxels[current_buffer],
+                            0,
+                            sizeof(int),
+                            kernel));
+
+        // kernel di compattazione
+        dim3 blockActiveVoxel(THREAD_BLOCK_SIZE_1D);
+        dim3 gridActiveVoxel((NUM_TOT_VOXELS + block2.x - 1) / block2.x);
+
+        extract_active_voxels<<<gridActiveVoxel, blockActiveVoxel, 0, kernel>>>(
+            d_voxels_output[current_buffer],
+            d_active_voxels[current_buffer],
+            d_num_active_voxels[current_buffer]
+        );
+        // lancio evento buffer voxels generici libero su stream kernel
+        cudaEventRecord(buffer_output_voxels_free_events[current_buffer], kernel);
+        //---------------------------------------------------------------
+        
         cudaEventRecord(buffer_output_contains_result_events[current_buffer], kernel);
 
         cudaStreamWaitEvent(d2h, buffer_output_contains_result_events[current_buffer], 0);
         cudaStreamWaitEvent(d2h, buffer_output_was_sent_events[current_buffer], 0);
-        CHECK(cudaMemcpyAsync(h_voxels_output[current_buffer], d_voxels_output[current_buffer], NUM_TOT_VOXELS * sizeof(int), cudaMemcpyDeviceToHost, d2h));
-        cudaEventRecord(buffer_output_free_events[current_buffer], d2h);
+        
+        //copia a host del numero di voxel attivi
+        CHECK(cudaMemcpyAsync(&h_num_active_voxels[current_buffer],
+                      d_num_active_voxels[current_buffer],
+                      sizeof(int),
+                      cudaMemcpyDeviceToHost,
+                      d2h));
+        //copia a host dei voxel attivi
+        CHECK(cudaMemcpyAsync(h_active_voxels[current_buffer],
+                            d_active_voxels[current_buffer],
+                            NUM_TOT_VOXELS * sizeof(Voxel),
+                            cudaMemcpyDeviceToHost,
+                            d2h));
+
+        // lancio evento buffer voxels attivi libero su stream d2h
+        cudaEventRecord(buffer_output_active_voxels_free_events[current_buffer], d2h);
+
         // --- INIZIO BLOCCO CALLBACK ---
 
         // Allocazione della struttura dati per passare gli argomenti alla callback
@@ -259,9 +369,9 @@ int main(void) {
         struct CallbackData *cb_args = (struct CallbackData *)malloc(sizeof(struct CallbackData));
         
         // Riempimento dati (Socket, Puntatore al buffer specifico, Dimensione, ID)
-        cb_args->socket_fd = renderer_fd; 
-        cb_args->buffer_ptr = h_voxels_output[current_buffer]; 
-        cb_args->data_size = NUM_TOT_VOXELS * sizeof(int);
+        cb_args->socket_fd = renderer_fd;         
+        cb_args->buffer_ptr = h_active_voxels[current_buffer];
+        cb_args->data_size  = h_num_active_voxels[current_buffer] * sizeof(Voxel);
         cb_args->buffer_id = i;
 
         // C. Aggiunta della callback allo stream d2h
@@ -270,7 +380,6 @@ int main(void) {
 
         // --- FINE BLOCCO CALLBACK ---
         cudaEventRecord(buffer_output_was_sent_events[current_buffer], d2h);
-
         i++;
     }
     
@@ -283,14 +392,18 @@ int main(void) {
     for (int i = 0; i < NUM_BUFFERS; i++) {
         CHECK(cudaFreeHost(h_pinned_inputs[i]));
         CHECK(cudaFreeHost(h_voxels_output[i]));
+        CHECK(cudaFreeHost(h_active_voxels[i]));
         CHECK(cudaFree(d_inputs[i]));
         CHECK(cudaFree(d_voxels_output[i]));
+        CHECK(cudaFree(d_num_active_voxels[i]));
+        CHECK(cudaFree(d_active_voxels[i]));
 
         // FIX: Distruzione eventi
         CHECK(cudaEventDestroy(buffer_input_free_events[i]));
         CHECK(cudaEventDestroy(h2d_done_events[i]));
         CHECK(cudaEventDestroy(buffer_output_contains_result_events[i]));
-        CHECK(cudaEventDestroy(buffer_output_free_events[i]));
+        CHECK(cudaEventDestroy(buffer_output_active_voxels_free_events[i]));
+        CHECK(cudaEventDestroy(buffer_output_voxels_free_events[i]));
         CHECK(cudaEventDestroy(buffer_output_was_sent_events[i]));
 
     }   
