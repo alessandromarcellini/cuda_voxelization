@@ -1,4 +1,4 @@
-nvcc worker.cu common/shader.cpp     -o ../builds/worker     -lglfw -lGLEW -lGL
+nvcc renderer.cu ../shaders/shader.cpp     -o ../builds/renderer     -lglfw -lGLEW -lGL -arch=sm_61
 
 
 !nvcc worker_no_rendering.cu -o worker_no_rendering -arch=sm_75

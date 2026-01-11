@@ -11,4 +11,4 @@ using namespace glm;
 #include <glm/gtc/matrix_transform.hpp>
 #include <vector>
 
-#include "common/shader.hpp"
+#include "../shaders/shader.hpp"

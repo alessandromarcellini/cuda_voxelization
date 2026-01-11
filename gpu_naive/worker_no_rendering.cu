@@ -7,7 +7,7 @@
 #include <arpa/inet.h>
 #include <cuda_runtime.h>
 #include <time.h>
-#include "params.hpp"
+#include "../headers/params.hpp"
 
 #define THREAD_BLOCK_SIZE 8
 
@@ -99,14 +99,14 @@ int main(void) {
 
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(PORT);
+    addr.sin_port = htons(WORKER_PORT);
 
     if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("Error binding socket"); exit(1);
     }
 
     listen(server_fd, 1);
-    printf("Server listening on port %d... Waiting for Supplier...\n", PORT);
+    printf("Server listening on port %d... Waiting for Supplier...\n", WORKER_PORT);
 
     client_fd = accept(server_fd, (struct sockaddr*)&addr, &addr_len);
     if (client_fd < 0) { perror("Error accepting request"); exit(1); }

@@ -5,8 +5,7 @@
 #include <string.h>
 #include <math.h>
 #include <arpa/inet.h>
-
-#include "params.hpp"
+#include "../headers/params.hpp"
 
 int compare_names(const void* a, const void* b) {
     const char* name_a = *(const char**)a;
@@ -26,7 +25,7 @@ int main(void) {
     }
 
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
+    server_addr.sin_port = htons(WORKER_PORT);
     inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr);
 
     if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {

@@ -6,7 +6,7 @@
 #include <math.h>
 #include <glm/glm.hpp>
 #include <time.h>
-#include "params.hpp"
+#include "../headers/params.hpp"
 
 int compare_names(const void* a, const void* b) {
     const char* name_a = *(const char**)a;

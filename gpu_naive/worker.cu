@@ -6,10 +6,7 @@
 #include <math.h>
 #include <arpa/inet.h>
 #include <cuda_runtime.h>
-#include "params.hpp"
-
-#define RENDERER_PORT 60000
-#define PORT 53456
+#include "../headers/params.hpp"
 
 #define THREAD_BLOCK_SIZE 8
 
@@ -66,7 +63,7 @@ int main(void) {
 
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(PORT);
+    addr.sin_port = htons(WORKER_PORT);
 
     if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("Error binding socket");
@@ -74,7 +71,7 @@ int main(void) {
     }
 
     listen(server_fd, 1);
-    printf("Server listening on port %d...\n", PORT);
+    printf("Server listening on port %d...\n", WORKER_PORT);
 
     client_fd = accept(server_fd, (struct sockaddr*)&addr, &addr_len);
     if (client_fd < 0) {

@@ -4,9 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-
-#include "opengl.hpp"
-#include "params.hpp"
+#include "../headers/opengl.hpp"
+#include "../headers/params.hpp"
 
 int compare_names(const void* a, const void* b) {
     const char* name_a = *(const char**)a;

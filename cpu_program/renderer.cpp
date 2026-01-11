@@ -7,16 +7,11 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <errno.h>
-
-#include "opengl.hpp"
-#include "params.hpp"
-
-#define MAX_DENSITY_THRESHOLD 7.5f
-#define PORT 60000 // todo mettila in params come renderer_port
+#include "../headers/opengl.hpp"
+#include "../headers/params.hpp"
 
 
 int main() {
-
 
     //--------------------------------SETUP OPENGL--------------------------------
     // Initialize GLFW
@@ -68,7 +63,7 @@ int main() {
 	glBindVertexArray(VertexArrayID);
 
 	// -----------------------------------------------------------------Create and compile our GLSL program from the shaders
-	GLuint programID = LoadShaders( "../cpu_program/VertexShader.vertexshader", "../cpu_program/FragmentShader.fragmentshader" );
+	GLuint programID = LoadShaders( "../shaders/VertexShader.vertexshader", "../shaders/FragmentShader.fragmentshader" );
     GLuint MatrixID = glGetUniformLocation(programID, "MVP");
     GLuint ModelMatrixID = glGetUniformLocation(programID, "Model"); 
     GLuint DensityID = glGetUniformLocation(programID, "voxelDensity");
@@ -221,7 +216,7 @@ int main() {
 
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(PORT);
+    addr.sin_port = htons(RENDERER_PORT);
 
     if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("Error binding socket");
@@ -229,7 +224,7 @@ int main() {
     }
 
     listen(server_fd, 1);
-    printf("Renderer listening on port %d...\n", PORT);
+    printf("Renderer listening on port %d...\n", RENDERER_PORT);
 
     client_fd = accept(server_fd, (struct sockaddr*)&addr, &addr_len);
     if (client_fd < 0) {
@@ -251,13 +246,13 @@ int main() {
         float currentTime = glfwGetTime();
         float deltaTime = currentTime - lastFrameTime;
 
+        printf("Frame Rate: %.4f /seconds. \n", 1.0/deltaTime);
+
         time_to_advance_frame = false;
         if (deltaTime >= FRAMEDURATION && !socket_closed) {
             time_to_advance_frame = true;
             lastFrameTime = currentTime;
         }
-
-        printf("Frame Rate: %.4f /seconds. ", 1.0/deltaTime);
 
         if (time_to_advance_frame) {
             // Aggiorno il timer
@@ -321,7 +316,6 @@ int main() {
         //---------------------render current voxels-------------------------------
         for (int i = 0; i < active_count; i++) {
             if (active_voxels[i].num_points > MIN_POINTS_IN_VOXEL_TO_RENDER) {
-                //render it
 
                 int x = active_voxels[i].x;
                 int y = active_voxels[i].y;
