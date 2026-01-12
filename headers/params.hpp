@@ -51,9 +51,15 @@ typedef struct {
   int num_points;
 } Voxel;
 
-struct CallbackData {
-    int socket_fd;       // La tua "data[0]"
+struct CallbackOldData {
+    int socket_fd;    // Il socket su cui inviare i dati
     void* buffer_ptr;    // Il puntatore al buffer da inviare
-    int active_count;    // Numero di voxel attivi nel buffer
-    int buffer_id;       // Solo per fare print di debug corretti (opzionale)
+    int* active_count;    // Numero di voxel attivi nel buffer
+    int buffer_id;        // ID del buffer
+};
+
+struct CallbackData {
+    void* buffer_ptr;    // Il puntatore al buffer da inviare
+    int* active_count;    // Numero di voxel attivi nel buffer
+    int buff_id;        // ID del buffer
 };

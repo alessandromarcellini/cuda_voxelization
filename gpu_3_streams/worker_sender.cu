@@ -13,6 +13,10 @@
 // uso di cuda events per segnalare quando un buffer è stato elaborato e quindi può essere sovrascritto (un evento che segnala che il buffer è libero)
 // uso di ringbuffer per gestire l'uso dei buffer
 
+#include <thread>
+#include <queue>
+#include <iostream>
+#include <condition_variable>
 #include <stdio.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -39,11 +43,19 @@ do {                                                                    \
 } while (0)
 
 
-void CUDART_CB send_socket(cudaStream_t stream, cudaError_t status, void *data) {
-    // 1. Casting del puntatore void* alla nostra struttura
-    struct CallbackOldData *args = (struct CallbackOldData *)data;
+std::queue<CallbackData> full_voxel_buffers;
+std::mutex mtx;
+std::condition_variable queueCV;
+bool stop = false;
 
-    // 2. Controllo errori CUDA precedenti (buona norma)
+
+
+void CUDART_CB callback(cudaStream_t stream, cudaError_t status, void *data) {
+
+    // Casting del puntatore void* alla nostra struttura
+    struct CallbackData *args = (struct CallbackData *)data;
+
+    // Controllo errori CUDA precedenti (buona norma)
     if (status != cudaSuccess) {
         printf("Errore stream CUDA prima della callback: %d\n", status);
         // Liberiamo la memoria allocata per gli argomenti prima di uscire
@@ -51,38 +63,13 @@ void CUDART_CB send_socket(cudaStream_t stream, cudaError_t status, void *data) 
         return;
     }
 
-    // 3. Estrazione dei dati (come richiesto: socket e buffer)
-    int sock = args->socket_fd;
-    char* buffer_to_send = (char*)args->buffer_ptr;
-    int buf_id = args->buffer_id;
-    int active_count = *(args->active_count);
-    size_t bytes_to_send = active_count * sizeof(Voxel);
-
-    printf("Callback avviata. Invio del buffer %d (%zu bytes) al renderer...\n", buf_id, bytes_to_send);
-
-    if (send(sock, &active_count, sizeof(int), 0) < 0) {
-        perror("Error sending active_count");
-        free(args);
-        return;
+    // risveglio del thread sender
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        full_voxel_buffers.push(*args);
     }
+    queueCV.notify_one();
 
-    size_t total_sent = 0;
-
-    // 4. Ciclo di invio
-    while (total_sent < bytes_to_send) {
-        // Nota: usiamo 'sock' e il puntatore specifico passato nella struct
-        ssize_t sent = send(sock, buffer_to_send + total_sent, bytes_to_send - total_sent, 0);
-
-        if (sent < 0) {
-            perror("Error sending voxel data inside callback");
-            break;
-        }
-        total_sent += sent;
-    }
-
-    printf("Completato invio buffer %d. Totale: %zu bytes.\n", buf_id, total_sent);
-
-    // 5. IMPORTANTE: Liberare la memoria della struct allocata nel main/host
     free(args);
 }
 
@@ -109,12 +96,10 @@ __global__ void voxelization(Point* d_input, Voxel* d_output, int num_points) {
     
     atomicAdd(&d_output[voxel_idx].num_points, 1);
 
-    //TODO exctract active voxels qui??????
-
 }
 
 
-__global__ void extract_active_voxels(Voxel* d_voxels, Voxel* d_active_voxels, int* d_num_active_voxels) { // TODO warp divergence
+__global__ void extract_active_voxels(Voxel* d_voxels, Voxel* d_active_voxels, int* d_num_active_voxels) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= NUM_TOT_VOXELS) return;
 
@@ -152,6 +137,46 @@ __global__ void reset_voxels(Voxel* voxels) {
     if (idx >= NUM_TOT_VOXELS) return;
 
     voxels[idx].num_points = 0;
+}
+
+void send_voxels(int sock_fd, cudaEvent_t* buffer_output_was_sent_events, cudaStream_t signal) {
+
+    do {
+        
+        std::unique_lock<std::mutex> lock(mtx);
+        queueCV.wait(lock, []{ return !full_voxel_buffers.empty();});
+
+        while(!full_voxel_buffers.empty()) {
+            CallbackData cb_data = full_voxel_buffers.front();
+            full_voxel_buffers.pop();
+
+            lock.unlock(); // sblocco la mutex mentre invio i dati
+
+            // Invio il numero di voxel attivi
+            int active_count = *(cb_data.active_count);
+            send(sock_fd, &active_count, sizeof(int), 0);
+
+            // Invio i voxel attivi
+            int bytes_to_send = active_count * sizeof(Voxel);
+            int total_sent = 0;
+            while (total_sent < bytes_to_send) {
+                int sent = send(sock_fd, (char*)cb_data.buffer_ptr + total_sent, bytes_to_send - total_sent, 0);
+                if (sent <= 0) {
+                    perror("Errore invio dati al renderer");
+                    break;
+                }
+                total_sent += sent;
+            }
+
+            printf("Inviati %d voxel attivi al renderer.\n", active_count);
+            cudaEventRecord(buffer_output_was_sent_events[cb_data.buff_id], signal);
+
+            lock.lock(); // ri-blocco la mutex per controllare la coda
+
+        }
+
+    }while(!stop);
+
 }
 
 
@@ -208,14 +233,14 @@ int main(void) {
 
     printf("Connected to renderer on port %d.\n\n", RENDERER_PORT);
 
-
     // ------------------------CUDA STREAMS SETUP -----------------
 
     // creating the streams
-    cudaStream_t h2d, kernel, d2h;
+    cudaStream_t h2d, kernel, d2h, signal;
     CHECK(cudaStreamCreate(&h2d));
     CHECK(cudaStreamCreate(&kernel));
     CHECK(cudaStreamCreate(&d2h));
+    CHECK(cudaStreamCreate(&signal));
 
     // creating NUM_BUFFERS buffers to manage multiple frames a time as inputs
     Point* h_pinned_inputs[NUM_BUFFERS];
@@ -261,9 +286,9 @@ int main(void) {
     cudaEvent_t buffer_input_free_events[NUM_BUFFERS];
     cudaEvent_t h2d_done_events[NUM_BUFFERS];          
     cudaEvent_t buffer_output_contains_result_events[NUM_BUFFERS]; 
-    cudaEvent_t buffer_output_active_voxels_free_events[NUM_BUFFERS];
-    cudaEvent_t buffer_output_voxels_free_events[NUM_BUFFERS];    
     cudaEvent_t buffer_output_was_sent_events[NUM_BUFFERS];
+    cudaEvent_t buffer_output_active_voxels_free_events[NUM_BUFFERS];
+    cudaEvent_t buffer_output_voxels_free_events[NUM_BUFFERS];
 
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
@@ -281,7 +306,10 @@ int main(void) {
         CHECK(cudaEventRecord(buffer_output_was_sent_events[i], d2h));
     }
 
+    // ------------------------ THREAD SENDER SETUP --------------
 
+    std::thread sender(send_voxels, renderer_fd, buffer_output_was_sent_events, signal);
+    
 
     int num_points;
     int i = 0, current_buffer = 0, total_received = 0, bytes_expected = 0;
@@ -367,24 +395,30 @@ int main(void) {
 
         // Allocazione della struttura dati per passare gli argomenti alla callback
         // Usiamo malloc perché la struct deve sopravvivere fino all'esecuzione della callback
-        struct CallbackOldData *cb_args = (struct CallbackOldData *)malloc(sizeof(struct CallbackOldData));
+        struct CallbackData *cb_args = (struct CallbackData *)malloc(sizeof(struct CallbackData));
         
-        // Riempimento dati (Socket, Puntatore al buffer specifico, Dimensione, ID)
-        cb_args->socket_fd = renderer_fd;         
+        // Riempimento dati (Socket, Puntatore al buffer specifico, Dimensione, ID)       
         cb_args->buffer_ptr = h_active_voxels[current_buffer];
         cb_args->active_count = &(h_num_active_voxels[current_buffer]);
-        cb_args->buffer_id = i;
+        cb_args->buff_id = current_buffer;
 
         // C. Aggiunta della callback allo stream d2h
         // Quando lo stream arriva qui, eseguirà send_socket passando cb_args
-        CHECK(cudaStreamAddCallback(d2h, send_socket, (void*)cb_args, 0));
+        CHECK(cudaStreamAddCallback(d2h, callback, (void*)cb_args, 0));
 
         // --- FINE BLOCCO CALLBACK ---
-        cudaEventRecord(buffer_output_was_sent_events[current_buffer], d2h);
         i++;
     }
     
-    
+    // shutdown thread sender
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        stop = true;
+    }
+    queueCV.notify_one();
+    sender.join();
+
+
     CHECK(cudaStreamDestroy(h2d));
     CHECK(cudaStreamDestroy(kernel));
     CHECK(cudaStreamDestroy(d2h));
