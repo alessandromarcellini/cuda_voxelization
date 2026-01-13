@@ -1,18 +1,8 @@
 nvcc renderer.cu ../shaders/shader.cpp     -o ../builds/renderer     -lglfw -lGLEW -lGL -arch=sm_61
 
 
-!nvcc worker_no_rendering.cu -o worker_no_rendering -arch=sm_75
-!echo "Compilazione Worker (worker_no_rendering) completata."
-
-# Compila il Supplier (C++) -> Crea 'supplier'
-# Assumo che il sorgente si chiami supplier.cpp
-!g++ supplier.cpp -o supplier -O3
-!echo "Compilazione Supplier (supplier) completata."
-
-# --- 2. PULIZIA ---
-
-# Uccidi eventuali processi vecchi rimasti appesi
-!pkill -f worker_no_rendering
+!pkill -f renderer
+!pkill -f worker
 !pkill -f supplier
 
 !echo "--- Avvio Orchestrazione ---"
@@ -25,13 +15,22 @@ nvcc renderer.cu ../shaders/shader.cpp     -o ../builds/renderer     -lglfw -lGL
 #    - &: manda in background
 #!stdbuf -oL ./worker_no_rendering > worker_log.txt 2>&1 &
 # Example: Profile and save the report to 'worker_report.ncu-rep'
-!# Lancia ncu sul worker, salva il report in 'report_worker', logga l'output su file e va in background
-!ncu -o report_worker --force --set full ./worker_no_rendering > worker_ncu_log.txt 2>&1 &
+# Lancia ncu sul worker, salva il report in 'report_worker', logga l'output su file e va in background
+
+!./renderer > renderer_log.txt 2>&1 &
+!echo "Renderer avviato in background."
+
+# B. Aspetta che il Renderer inizializzi CUDA e la Socket
+!echo "Attendo 5 secondi per inizializzazione..."
+!sleep 5
+
+
+!ncu -o report_worker --force --set full ./worker > worker_ncu_log.txt 2>&1 &
 !echo "Worker avviato in background."
 
 # B. Aspetta che il Worker inizializzi CUDA e la Socket
-!echo "Attendo 10 secondi per inizializzazione..."
-!sleep 10
+!echo "Attendo 5 secondi per inizializzazione..."
+!sleep 5
 
 # C. Check di sicurezza: vediamo se la porta è aperta
 !echo "Controllo porte attive (Dovresti vedere la porta 53456):"
