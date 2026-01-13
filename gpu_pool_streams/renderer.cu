@@ -30,12 +30,15 @@ __global__ void vectorGeneration(float4* d_vectors) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     int z = blockIdx.z * blockDim.z + threadIdx.z;
-    int nx = gridDim.x * blockDim.x;
-    int ny = gridDim.y * blockDim.y;
-    int idx = z * (nx * ny) + y * nx + x;
 
     if (x >= NUM_VOXELS_X || y >= NUM_VOXELS_Y || z >= NUM_VOXELS_Z)
         return;
+
+    int width_x = NUM_VOXELS_X; 
+    int width_y = NUM_VOXELS_Y;
+
+    // Calcolo indice basato sulla geometria REALE della memoria
+    int idx = z * (width_x * width_y) + y * width_x + x;
 
     float4 vector = {
         (x * DIM_VOXEL + DIM_VOXEL / 2.0f) + MIN_X,
@@ -215,7 +218,7 @@ int main() {
 
     // -------------------------- GENERAZIONE VETTORI TRASLAZIONE --------------------
 
-    float4* vectorTranslations = (float4*) malloc(NUM_TOT_VOXELS * sizeof(float4));
+    float4* voxelTranslationVectors = (float4*) malloc(NUM_TOT_VOXELS * sizeof(float4));
     float4* d_vectors;
     CHECK(cudaMalloc(&d_vectors, NUM_TOT_VOXELS*sizeof(float4)));
 
@@ -227,7 +230,7 @@ int main() {
     );
 
     vectorGeneration <<<gridSize, blockSize>>>(d_vectors);
-    CHECK(cudaMemcpy(vectorTranslations, d_vectors, NUM_TOT_VOXELS * sizeof(float4), cudaMemcpyDeviceToHost));
+    CHECK(cudaMemcpy(voxelTranslationVectors, d_vectors, NUM_TOT_VOXELS * sizeof(float4), cudaMemcpyDeviceToHost));
     CHECK(cudaFree(d_vectors));
 
 
@@ -236,8 +239,6 @@ int main() {
     int server_fd, client_fd;
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
-    Point* curr_points;
-    Point* d_input;
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
@@ -269,8 +270,8 @@ int main() {
     bool time_to_advance_frame;
     int num_points = 0;
     bool socket_closed = false;
-    int* voxels = (int*) malloc(NUM_TOT_VOXELS * sizeof(int));
-    memset(voxels, 0, NUM_TOT_VOXELS * sizeof(int)); // Initialize to zeros
+    Voxel* active_voxels = NULL;
+    int active_count = 0;
 
     do {
         //--------------------CHECK IF IT'S TIME TO UPDATE---------------------------
@@ -290,11 +291,21 @@ int main() {
             // Aggiorno il timer
             lastFrameTime = currentTime; 
 
-            int bytes_expected = NUM_TOT_VOXELS * sizeof(int);
-            int total_received = 0;
-            char* ptr_buffer = (char*)voxels; // Importante: cast a char* per aritmetica dei puntatori
+            active_count = 0;
+            int received_count = recv(client_fd, &active_count, sizeof(int), 0);
+            
+            if (received_count <= 0) {
+                printf("Connessione chiusa o errore.\n");
+                socket_closed = true;
+                break;
+            }
 
-            // Ciclo finché non ho ricevuto TUTTO il frame
+            active_voxels = (Voxel*) malloc(active_count * sizeof(Voxel));
+
+            int bytes_expected = active_count * sizeof(Voxel);
+            int total_received = 0;
+            char* ptr_buffer = (char*)active_voxels; // Importante: cast a char* per aritmetica dei puntatori   
+            
             while (total_received < bytes_expected) {
                 int received = recv(client_fd, ptr_buffer + total_received, bytes_expected - total_received, 0);
                 
@@ -335,14 +346,22 @@ int main() {
             1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0
         );
 
+
         //---------------------render current voxels-------------------------------
-        for (int i = 0; i < NUM_TOT_VOXELS; i++) {
-            if (voxels[i] > MIN_POINTS_IN_VOXEL_TO_RENDER) {
+
+        int index = 0;
+        for (int i = 0; i < active_count; i++) {
+            if (active_voxels[i].num_points > MIN_POINTS_IN_VOXEL_TO_RENDER) {
+
+                int x = active_voxels[i].x;
+                int y = active_voxels[i].y;
+                int z = active_voxels[i].z;
+                index = z * (NUM_VOXELS_X * NUM_VOXELS_Y) + y * NUM_VOXELS_X + x;
 
                 glm::vec3 t(
-                    vectorTranslations[i].x,
-                    vectorTranslations[i].y,
-                    vectorTranslations[i].z
+                    voxelTranslationVectors[index].x,
+                    voxelTranslationVectors[index].y,
+                    voxelTranslationVectors[index].z
                 );
 
                 // Calcolo Model Matrix
@@ -360,7 +379,7 @@ int main() {
                 glUniformMatrix4fv(ModelMatrixID, 1, GL_FALSE, &Model1[0][0]);
 
                 // 3. Densità per il colore (Heatmap)
-                float density = (float)voxels[i] / (float)MAX_DENSITY_THRESHOLD;
+                float density = (float)active_voxels[i].num_points / (float)MAX_DENSITY_THRESHOLD;
                 glUniform1f(DensityID, density);
 
                 glDrawArrays(GL_TRIANGLES, 0, 12*3);
@@ -383,8 +402,8 @@ int main() {
 	glDeleteVertexArrays(1, &VertexArrayID);
 	glDeleteProgram(programID);
 
-    free(voxels);
-    free(vectorTranslations);
+    free(active_voxels);
+    free(voxelTranslationVectors);
     close(client_fd);
 
 	// Close OpenGL window and terminate GLFW
