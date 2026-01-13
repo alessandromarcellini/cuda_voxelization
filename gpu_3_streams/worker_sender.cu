@@ -53,7 +53,7 @@ bool stop = false;
 void CUDART_CB callback(cudaStream_t stream, cudaError_t status, void *data) {
 
     // Casting del puntatore void* alla nostra struttura
-    struct CallbackData *args = (struct CallbackData *)data;
+    CallbackData *args = (CallbackData *)data;
 
     // Controllo errori CUDA precedenti (buona norma)
     if (status != cudaSuccess) {
@@ -395,7 +395,7 @@ int main(void) {
 
         // Allocazione della struttura dati per passare gli argomenti alla callback
         // Usiamo malloc perché la struct deve sopravvivere fino all'esecuzione della callback
-        struct CallbackData *cb_args = (struct CallbackData *)malloc(sizeof(struct CallbackData));
+        CallbackData *cb_args = (CallbackData *)malloc(sizeof(CallbackData));
         
         // Riempimento dati (Socket, Puntatore al buffer specifico, Dimensione, ID)       
         cb_args->buffer_ptr = h_active_voxels[current_buffer];

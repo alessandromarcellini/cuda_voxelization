@@ -58,8 +58,8 @@ struct CallbackOldData {
     int buffer_id;        // ID del buffer
 };
 
-struct CallbackData {
+typedef struct {
     void* buffer_ptr;    // Il puntatore al buffer da inviare
     int* active_count;    // Numero di voxel attivi nel buffer
     int buff_id;        // ID del buffer
-};
+} CallbackData;

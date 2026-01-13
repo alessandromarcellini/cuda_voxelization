@@ -34,7 +34,7 @@ do {                                                                    \
 } while (0)
 
 
-__global__ void voxelization(Point* d_input, int* d_output, int num_points) {
+__global__ void voxelization(Point* d_input, Voxel* d_output, int num_points) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_points) return;
 
@@ -55,9 +55,164 @@ __global__ void voxelization(Point* d_input, int* d_output, int num_points) {
     // calcolo indice array lineare voxel
     int voxel_idx = curr_voxel_z * (NUM_VOXELS_X* NUM_VOXELS_Y) + curr_voxel_y * NUM_VOXELS_X + curr_voxel_x;
     
-    atomicAdd(&d_output[voxel_idx], 1); 
+    atomicAdd(&d_output[voxel_idx].num_points, 1);
+
+}
+// ----------------------------------------------------------
+__global__ void setup_voxels(Voxel* voxels) {
+
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int z = blockIdx.z * blockDim.z + threadIdx.z;
+
+    if (x >= NUM_VOXELS_X ||
+        y >= NUM_VOXELS_Y ||
+        z >= NUM_VOXELS_Z)
+        return;
+
+    int idx = z * (NUM_VOXELS_X * NUM_VOXELS_Y)
+            + y * NUM_VOXELS_X
+            + x;
+
+    voxels[idx].x = x;
+    voxels[idx].y = y;
+    voxels[idx].z = z;
+    voxels[idx].num_points = 0;
 }
 
+// -----------------------------------------------------------------
+__global__ void reset_voxels(Voxel* voxels) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= NUM_TOT_VOXELS) return;
+
+    voxels[idx].num_points = 0;
+}
+
+
+std::queue<CallbackData> full_voxel_buffers;
+std::mutex mtx;
+std::condition_variable queueCV;
+bool stop = false;
+
+
+
+void CUDART_CB callback(cudaStream_t stream, cudaError_t status, void *data) {
+
+    // Casting del puntatore void* alla nostra struttura
+    CallbackData *args = (CallbackData *)data;
+
+    // Controllo errori CUDA precedenti (buona norma)
+    if (status != cudaSuccess) {
+        printf("Errore stream CUDA prima della callback: %d\n", status);
+        // Liberiamo la memoria allocata per gli argomenti prima di uscire
+        free(args); 
+        return;
+    }
+
+    // risveglio del thread sender
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        full_voxel_buffers.push(*args);
+    }
+    queueCV.notify_one();
+
+    free(args);
+}
+
+bool isEmpty(const CallbackData cb)
+{
+    return *cb.active_count < 0;
+}
+
+void resetBuffer(const CallbackData* buffer)
+{
+    *buffer.active_count = -1;
+}
+
+// ---------------------------------------------------------------------------
+void send_voxels(int sock_fd, cudaEvent_t* output_was_sent_events, cudaStream_t signal) {
+    // enable bufferization for reordering
+    CallbackData buffers[NUM_BUFFERS];
+    int next_buffer_to_send = 0;
+
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        *buffers[i].active_count = -1;
+    }
+
+    do {
+        std::unique_lock<std::mutex> lock(mtx);
+        queueCV.wait(lock, []{ return !full_voxel_buffers.empty();});
+
+        while(!full_voxel_buffers.empty()) {
+            CallbackData cb_data = full_voxel_buffers.front();
+            full_voxel_buffers.pop();
+            
+
+            // if data is not the next one to send bufferize it
+            if (cb_data.buff_id != next_buffer_to_send) {
+                buffers[cb_data.buff_id] = cb_data;
+                printf("BUFFERIZZATI %d voxel.\n", *cb_data.active_count);
+            }
+            else {
+                lock.unlock(); // sblocco la mutex mentre invio i dati
+                // Invio il numero di voxel attivi
+                int active_count = *(cb_data.active_count);
+                send(sock_fd, &active_count, sizeof(int), 0);
+
+                // Invio i voxel attivi
+                int bytes_to_send = active_count * sizeof(Voxel);
+                int total_sent = 0;
+                while (total_sent < bytes_to_send) {
+                    int sent = send(sock_fd, (char*)cb_data.buffer_ptr + total_sent, bytes_to_send - total_sent, 0);
+                    if (sent <= 0) {
+                        perror("Errore invio dati al renderer");
+                        break;
+                    }
+                    total_sent += sent;
+                }
+                next_buffer_to_send = (next_buffer_to_send + 1) % NUM_BUFFERS;
+
+                cudaEventRecord(output_was_sent_events[cb_data.buff_id], signal);
+                printf("Inviati %d voxel attivi al renderer.\n", active_count);
+
+                // ------------------------------------------------
+                // controlla se i prossimi frame sono bufferizzati, in casd send e incremento next_buffer_to_send;
+                int i = 0;
+                for (int j = next_buffer_to_send; i <= NUM_BUFFERS; j = (j + 1) % NUM_BUFFERS) {
+
+                    if (isEmpty(buffers[j])) {
+                        break;
+                    }
+                    
+                    //if buffer content is not null send it and reset it to null
+                    // Invio il numero di voxel attivi
+                    int active_count = *(buffers[j].active_count);
+                    send(sock_fd, &active_count, sizeof(int), 0);
+
+                    // Invio i voxel attivi
+                    int bytes_to_send = active_count * sizeof(Voxel);
+                    int total_sent = 0;
+                    while (total_sent < bytes_to_send) {
+                        int sent = send(sock_fd, (char*)buffers[j].buffer_ptr + total_sent, bytes_to_send - total_sent, 0);
+                        if (sent <= 0) {
+                            perror("Errore invio dati al renderer");
+                            break;
+                        }
+                        total_sent += sent;
+                    }
+                    next_buffer_to_send = (next_buffer_to_send + 1) % NUM_BUFFERS;
+                    resetBuffer(buffers[j]);
+                    cudaEventRecord(output_was_sent_events[buffers[j].buff_id], signal);
+                    printf("Inviati %d voxel attivi al renderer BUFFERIZZATI.\n", active_count);
+                    i++;
+                }
+                lock.lock(); // ri-blocco la mutex per controllare la coda
+            }
+        }
+
+    }while(!stop);
+
+}
 
 
 int main(void) {
@@ -119,21 +274,26 @@ int main(void) {
 
     // creating the streams
     cudaStream_t streams[NUM_BUFFERS];
+    cudaStream_t signal;
+    CHECK(cudaStreamCreate(&signal));
     for (int i = 0; i < NUM_BUFFERS; i++) {
         CHECK(cudaStreamCreate(&streams[i]));
     }
-
-    // events to manage the buffers
-    cudaEvent_t h2d_done_events[NUM_BUFFERS];
-    cudaEvent_t output_was_sent_events[NUM_BUFFERS];
 
     // creating NUM_BUFFERS buffers to manage multiple frames a time as inputs
     Point* h_pinned_inputs[NUM_BUFFERS];
     Point* d_inputs[NUM_BUFFERS];
 
     // creating NUM_BUFFERS buffers for output voxels
-    int* d_voxels_output[NUM_BUFFERS];
-    int* h_voxels_output[NUM_BUFFERS];
+    Voxel* d_voxels_output[NUM_BUFFERS];
+
+    // creating buffers to host active voxels on GPU
+    Voxel* d_active_voxels[NUM_BUFFERS];
+    int*   d_num_active_voxels[NUM_BUFFERS];
+
+    // creating buffers to host active voxels on CPU
+    Voxel* h_active_voxels[NUM_BUFFERS];
+    int    h_num_active_voxels[NUM_BUFFERS];
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
         // alloco memoria host pinned sulla ram per i frame in input
@@ -141,27 +301,47 @@ int main(void) {
         // alloco memoria device per input
         CHECK(cudaMalloc((void**)&d_inputs[i], MAX_POINTS_PER_BUFFER * sizeof(Point)));
 
-        // alloco memoria host pinned per i voxels in output
-        CHECK(cudaMallocHost((void**)&h_voxels_output[i], NUM_TOT_VOXELS * sizeof(int)));
         // alloco memoria device per output
-        CHECK(cudaMalloc((void**)&d_voxels_output[i], NUM_TOT_VOXELS * sizeof(int)));
+        CHECK(cudaMalloc((void**)&d_voxels_output[i], NUM_TOT_VOXELS * sizeof(Voxel)));
 
+        dim3 blockSetupVoxels(THREAD_BLOCK_SIZE_3D, THREAD_BLOCK_SIZE_3D, THREAD_BLOCK_SIZE_3D);
+        dim3 gridSetupVoxels(
+            (NUM_VOXELS_X + THREAD_BLOCK_SIZE_3D - 1) / THREAD_BLOCK_SIZE_3D,
+            (NUM_VOXELS_Y + THREAD_BLOCK_SIZE_3D - 1) / THREAD_BLOCK_SIZE_3D,
+            (NUM_VOXELS_Z + THREAD_BLOCK_SIZE_3D - 1) / THREAD_BLOCK_SIZE_3D
+        );
+        setup_voxels <<< gridSetupVoxels, blockSetupVoxels, 0, 0 >>>(d_voxels_output[i]);
+
+        //alloco memoria per contatori e voxel attivi
+        CHECK(cudaMalloc((void**)&d_active_voxels[i], NUM_TOT_VOXELS * sizeof(Voxel)));
+        CHECK(cudaMalloc((void**)&d_num_active_voxels[i], sizeof(int)));
+
+        CHECK(cudaMallocHost((void**)&h_active_voxels[i], NUM_TOT_VOXELS * sizeof(Voxel)));
+    }
+
+
+    // --------------------EVENTS SETUP --------------------------------
+    // events to manage the buffers
+    cudaEvent_t h2d_done_events[NUM_BUFFERS];
+    cudaEvent_t output_was_sent_events[NUM_BUFFERS];
+    for (int i = 0; i < NUM_BUFFERS; i++) {
         // creazione eventi
         CHECK(cudaEventCreateWithFlags(&h2d_done_events[i], cudaEventDisableTiming));
         CHECK(cudaEventCreateWithFlags(&output_was_sent_events[i], cudaEventDisableTiming));
 
         // Inizializzazione eventi per il primo giro
         CHECK(cudaEventRecord(h2d_done_events[i], streams[i]));
-        CHECK(cudaEventRecord(output_was_sent_events[i], streams[i]));
-
+        CHECK(cudaEventRecord(output_was_sent_events[i], signal));
     }
 
+    // ------------------------ SETUP THREAD SENDER-------------------------
+    std::thread sender(send_voxels, renderer_fd, output_was_sent_events, signal);
 
+    // -----------------LOOP RICEZIONE----------------------------
     int num_points;
     int i = 0, current_stream = 0, total_received = 0, bytes_expected = 0, next_frame_to_send = 0;
     int buffer_output_ready[NUM_BUFFERS] = {0};
 
-    // -----------------LOOP RICEZIONE----------------------------
     while (recv(client_fd, &num_points, sizeof(int), 0) > 0) { 
         
         current_stream = i % NUM_BUFFERS;
@@ -183,69 +363,63 @@ int main(void) {
         }
 
         // ---------------------- VOXELIZATION ----------------------------
-
-
         CHECK(cudaMemcpyAsync(d_inputs[current_stream], h_pinned_inputs[current_stream], num_points * sizeof(Point), cudaMemcpyHostToDevice, streams[current_stream]));
         cudaEventRecord(h2d_done_events[current_stream], streams[current_stream]);
-        
-        CHECK(cudaMemsetAsync(d_voxels_output[current_stream], 0, NUM_TOT_VOXELS * sizeof(int), streams[current_stream]));
+       
+        // TODO deve diventare kernel
+        dim3 blockResetVoxels(THREAD_BLOCK_SIZE_1D);
+        dim3 gridResetVoxels((NUM_TOT_VOXELS + THREAD_BLOCK_SIZE_1D - 1) / THREAD_BLOCK_SIZE_1D);
+        reset_voxels<<<gridResetVoxels, blockResetVoxels, 0, kernel>>>(d_voxels_output[current_stream]);
 
         dim3 blockVox(THREAD_BLOCK_SIZE);
         dim3 gridVox((num_points + THREAD_BLOCK_SIZE - 1) / THREAD_BLOCK_SIZE);
         voxelization <<<gridVox, blockVox, 0, streams[current_stream]>>>(d_inputs[current_stream], d_voxels_output[current_stream], num_points);
         
+        // kernel di compattazione
+        dim3 blockActiveVoxel(THREAD_BLOCK_SIZE_1D);
+        dim3 gridActiveVoxel((NUM_TOT_VOXELS + THREAD_BLOCK_SIZE_1D - 1) / THREAD_BLOCK_SIZE_1D);
+
+        extract_active_voxels<<<gridActiveVoxel, blockActiveVoxel, 0, kernel>>>(
+            d_voxels_output[current_stream],
+            d_active_voxels[current_stream],
+            d_num_active_voxels[current_stream]
+        );
+
         CHECK(cudaStreamWaitEvent(streams[current_stream], output_was_sent_events[current_stream], 0));
-        CHECK(cudaMemcpyAsync(h_voxels_output[current_stream], d_voxels_output[current_stream], NUM_TOT_VOXELS * sizeof(int), cudaMemcpyDeviceToHost, streams[current_stream]));
 
+        //copia a host del numero di voxel attivi
+        CHECK(cudaMemcpyAsync(&h_num_active_voxels[current_stream],
+                      d_num_active_voxels[current_stream],
+                      sizeof(int),
+                      cudaMemcpyDeviceToHost,
+                      streams[current_stream]));
+        //copia a host dei voxel attivi
+        CHECK(cudaMemcpyAsync(h_active_voxels[current_stream],
+                            d_active_voxels[current_stream],
+                            NUM_TOT_VOXELS * sizeof(Voxel),
+                            cudaMemcpyDeviceToHost,
+                            streams[current_stream]));
 
+        // Riempimento dati (Socket, Puntatore al buffer specifico, Dimensione, ID)       
+        cb_args->buffer_ptr = h_active_voxels[current_stream];
+        cb_args->active_count = &(h_num_active_voxels[current_stream]);
+        cb_args->buff_id = current_stream;
 
-        for (int i = 0; i < NUM_BUFFERS; i++) {
-            if (!buffer_output_ready[i]) {
-                if (cudaEventQuery(output_was_sent_events[i]) == cudaSuccess) {
-                    buffer_output_ready[i] = 1; // La GPU ha finito questo slot
-                }
-            }
-        }
-
-        // --- 3. IL CICLO DI INVIO ORDINATO ---
-        // Qui avviene la magia: inviamo SOLO se il frame pronto è quello che ci aspettiamo
-        int output_slot = next_frame_to_send % NUM_BUFFERS;
-        
-        // Continuiamo a inviare finché abbiamo una catena di frame pronti consecutivi
-        while (buffer_output_ready[output_slot]) {
-            
-            // Invio dei dati al renderer
-            int total_sent = 0;
-            int bytes_to_send = NUM_TOT_VOXELS * sizeof(int);
-
-            // 4. Ciclo di invio
-            while (total_sent < bytes_to_send) {
-                
-                int sent = send(renderer_fd, h_voxels_output[output_slot] + total_sent, bytes_to_send - total_sent, 0);
-
-                if (sent < 0) {
-                    perror("Error sending voxel data inside callback");
-                    break;
-                }
-                total_sent += sent;
-            }
-
-            printf("Completato invio buffer %d. Totale: %zu bytes.\n", output_slot, total_sent);
-            cudaEventRecord(output_was_sent_events[output_slot], streams[(next_frame_to_send+1) % NUM_BUFFERS]); // registro l'evento nello stream successivo per evitare conflitti
-            
-            // Resettiamo lo stato per il prossimo giro
-            buffer_output_ready[output_slot] = 0; 
-            
-            // Passiamo al prossimo frame atteso
-            next_frame_to_send++;
-            output_slot = next_frame_to_send % NUM_BUFFERS;
-        }
-
+        CHECK(cudaStreamAddCallback(streams[current_stream], callback, (void*)cb_args, 0));
         i++;
-
     }
     
-    
+    // CLEANUP
+
+    // shutdown thread sender
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        stop = true;
+    }
+    queueCV.notify_one();
+    sender.join();
+
+
     for (int i = 0; i < NUM_BUFFERS; i++) {
         CHECK(cudaStreamDestroy(streams[i]));
     }
@@ -253,15 +427,17 @@ int main(void) {
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
         CHECK(cudaFreeHost(h_pinned_inputs[i]));
-        CHECK(cudaFreeHost(h_voxels_output[i]));
+        CHECK(cudaFreeHost(h_active_voxels[i]));
         CHECK(cudaFree(d_inputs[i]));
         CHECK(cudaFree(d_voxels_output[i]));
+        CHECK(cudaFree(d_num_active_voxels[i]));
+        CHECK(cudaFree(d_active_voxels[i]));
+    }
 
-        // FIX: Distruzione eventi
+    for (int i = 0; i < NUM_BUFFERS; i++) {
         CHECK(cudaEventDestroy(h2d_done_events[i]));
         CHECK(cudaEventDestroy(output_was_sent_events[i]));
-
-    }   
+    }
 
     close(client_fd);
     close(server_fd);
