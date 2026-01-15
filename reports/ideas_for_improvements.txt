@@ -1,0 +1,19 @@
+1) ILP optimization: far processare più punti allo stesso thread di modo che le operazioni di load essendo indipendenti vengano emesse una dopo l'altra.
+Miglioramento teorico: meno thread => meno warp => più istruzioni di load emesse "parallelamente" tramite ILP rispetto ad avere un thread per punto. In quel caso infatti probabilmente molti thread rimarrebbero fuori dalla GPU risultando in waves. Questo porterebbe a meno istruzioni di load emesse contemporaneamente.
+DA VALUTARE.
+
+
+2) migliorare la MemCpy sfruttando più byte del bus facendo un trasferimento unico di più elementi contemporaneamente. Es. struttura voxel attivi e num_voxel_attivi (Probabile speedup minimo)
+
+3) provare a cambiare il tipo di dati. Es. da int (int32) a int16. Nota: non scendere sotto int16 perchè sono interi emulati, sono int32 a cui viene applicata una mask, nessuno speedup vero e proprio.
+Per i Point probabilmente ci sono versioni di float migliori e più conservative.
+
+4) Ordinare i punti in ingresso di modo che punti consecutivi ricadano nello stesso/in un voxel vicino della struttura voxels. In questo modo si sfrutta al meglio la cache. (Controllare se sono già ordinati). In caso capire se può convenire cambiare la struttura della struttura voxels di conseguenza, evitando così il reordering. (Es. switchare x con y...)
+
+5) Usare shared memory per ridurre l'impatto delle atomicAdd. Ogni blocco mantiene una mini griglia di voxels in shared memory e l'atomicAdd avviene in shared memory. NOTA: anche qui bisogna assicurarsi che i punti di un blocco (almeno la maggior parte se vogliamo approssimare) ricadano in voxels vicini.
+
+6) Valutare l'uso di reduce come alternativa; in questo modo si andrebbe ad eliminare completamente l'atomicAdd. Si usa sempre la global memory ma vi si alloca un array grande NUM_MAX_PUNTI ed al suo interno ogni thread istanzia nel suo idx una struttura (VoxelID, 1). Alla fine di questo processo si fa la thrust::sort_by_key(voxelID) e successivamente la thrust::reduce_by_key.
+
+
+
+Controllare comunque l'impatto delle atomiche e degli accessi non coalesced tramite Nsight compute.
