@@ -1,0 +1,22 @@
+==3788== Profiling result:
+            Type  Time(%)      Time     Calls       Avg       Min       Max  Name
+ GPU activities:   90.69%  1.95317s        30  65.106ms     962ns  466.01ms  [CUDA memcpy DtoH]
+                    4.70%  101.17ms        15  6.7445ms  4.0363ms  44.641ms  reset_voxels(Voxel*)
+                    3.83%  82.388ms        15  5.4925ms  3.5472ms  32.657ms  extract_active_voxels(Voxel*, Voxel*, int*)
+                    0.61%  13.148ms         1  13.148ms  13.148ms  13.148ms  setup_voxels(Voxel*)
+                    0.12%  2.6060ms        15  173.73us  121.94us  400.35us  [CUDA memcpy HtoD]
+                    0.05%  1.1593ms        15  77.286us  51.594us  389.94us  voxelization(Point*, Voxel*, int)
+                    0.00%  9.5700us        15     638ns     525ns  1.2250us  [CUDA memset]
+      API calls:   82.09%  2.44521s        44  55.573ms  228.11us  528.43ms  cudaMemcpy
+                   16.81%  500.73ms        18  27.819ms  17.507us  494.16ms  cudaMalloc
+                    0.73%  21.607ms        46  469.71us  5.7670us  20.436ms  cudaLaunchKernel
+                    0.30%  9.0238ms        18  501.32us  16.786us  4.6515ms  cudaFree
+                    0.03%  1.0358ms       101  10.255us     102ns  1.0126ms  cuDeviceGetAttribute
+                    0.03%  943.02us        15  62.867us  44.283us  136.35us  cudaMemset
+                    0.00%  5.9730us         1  5.9730us  5.9730us  5.9730us  cuDeviceTotalMem
+                    0.00%  4.0170us         1  4.0170us  4.0170us  4.0170us  cuDeviceGetPCIBusId
+                    0.00%  3.3990us         3  1.1330us     206ns  2.6780us  cuDeviceGetCount
+                    0.00%  2.2660us         2  1.1330us     618ns  1.6480us  cuDeviceGet
+                    0.00%  1.3390us         1  1.3390us  1.3390us  1.3390us  cuDeviceGetName
+                    0.00%     206ns         1     206ns     206ns     206ns  cuModuleGetLoadingMode
+                    0.00%     206ns         1     206ns     206ns     206ns  cuDeviceGetUuid
