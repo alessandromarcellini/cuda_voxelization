@@ -1,0 +1,3 @@
+COSE FATTE PER OTTIMIZZARE:
+	1) setup_voxels => cambiato struttura grid e block da 3d a 1d per permettere accessi coalescenti nella scrittura.
+	2) reset_voxels => levato num_points dalla struttura Voxel di modo da permettere accessi coalescenti in memoria nel reset a 0 dei num_points. usato un semplice array di interi per tenere traccia dei numeri di punti per voxel.
