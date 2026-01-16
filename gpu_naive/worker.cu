@@ -8,8 +8,9 @@
 #include <cuda_runtime.h>
 #include "../headers/params.hpp"
 
-#define THREAD_BLOCK_SIZE_1D 256
+#define THREAD_BLOCK_SIZE_1D 512
 #define THREAD_BLOCK_SIZE_3D 8
+
 
 #define CHECK(call)                                                     \
 do {                                                                    \
@@ -58,25 +59,33 @@ __global__ void extract_active_voxels(Voxel* d_voxels, Voxel* d_active_voxels, i
     }
 }
 
+
+
 __global__ void setup_voxels(Voxel* voxels) {
+    
+    // 1. Calcolo dell'indice lineare globale
+    // Utilizziamo una griglia 1D e blocchi 1D per accessi coalescenti all'interno dello stesso warp
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx >= NUM_TOT_VOXELS) return;
 
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int z = blockIdx.z * blockDim.z + threadIdx.z;
+    // 2. Ricostruzione delle coordinate
+    int temp = idx;
+    int x = temp % NUM_VOXELS_X;
+    temp /= NUM_VOXELS_X;
+    int y = temp % NUM_VOXELS_Y;
+    int z = temp / NUM_VOXELS_Y;
 
-    if (x >= NUM_VOXELS_X ||
-        y >= NUM_VOXELS_Y ||
-        z >= NUM_VOXELS_Z)
-        return;
+    // 3. Preparazione del dato nei registri
+    int4 voxel_data;
+    voxel_data.x = x;
+    voxel_data.y = y;
+    voxel_data.z = z;
+    voxel_data.w = 0; // num_points
 
-    int idx = z * (NUM_VOXELS_X * NUM_VOXELS_Y)
-            + y * NUM_VOXELS_X
-            + x;
-
-    voxels[idx].x = x;
-    voxels[idx].y = y;
-    voxels[idx].z = z;
-    voxels[idx].num_points = 0;
+    // 4. UNICA Scrittura in Memoria Globale
+    // Tratta il puntatore voxels come se fosse un puntatore a int4
+    reinterpret_cast<int4*>(voxels)[idx] = voxel_data;
 }
 
 
@@ -158,10 +167,8 @@ int main(void) {
     Voxel* h_active_voxels = (Voxel*) malloc(NUM_TOT_VOXELS * sizeof(Voxel));
     int    h_num_active_voxels;
 
-    dim3 blockSetupVoxels(THREAD_BLOCK_SIZE_3D, THREAD_BLOCK_SIZE_3D, THREAD_BLOCK_SIZE_3D);
-    dim3 gridSetupVoxels((NUM_VOXELS_X + THREAD_BLOCK_SIZE_3D - 1) / THREAD_BLOCK_SIZE_3D,
-                         (NUM_VOXELS_Y + THREAD_BLOCK_SIZE_3D - 1) / THREAD_BLOCK_SIZE_3D,
-                         (NUM_VOXELS_Z + THREAD_BLOCK_SIZE_3D - 1) / THREAD_BLOCK_SIZE_3D);
+    dim3 blockSetupVoxels(THREAD_BLOCK_SIZE_1D);
+    dim3 gridSetupVoxels((NUM_TOT_VOXELS + THREAD_BLOCK_SIZE_1D - 1) / THREAD_BLOCK_SIZE_1D);
     setup_voxels<<<gridSetupVoxels, blockSetupVoxels>>>(d_voxels_output);
 
 

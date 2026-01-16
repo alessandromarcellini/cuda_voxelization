@@ -44,11 +44,8 @@ typedef struct {
   int k;
 } VoxelIndices;
 
-typedef struct {
-  int x;
-  int y;
-  int z;
-  int num_points;
+typedef struct alignas(8) {
+    u_int16_t x, y, z, num_points;
 } Voxel;
 
 struct CallbackOldData {
