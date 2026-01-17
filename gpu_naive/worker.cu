@@ -102,13 +102,21 @@ __global__ void extract_active_voxels(int* d_voxels, Voxel* d_active_voxels, int
         // L'indice del vettore salta di 'stride' ad ogni iterazione
         int current_vec_idx = idx + k * stride_vectors;
 
-        // Lettura Coalesced Perfetta: Thread i legge vec i, Thread i+1 legge vec i+1
-        int4 voxel_quad = base_ptr_int4[current_vec_idx];
+        if (current_vec_idx < NUM_INT4) {
+            // Lettura Coalesced Perfetta
+            int4 voxel_quad = base_ptr_int4[current_vec_idx];
 
-        voxel_num_points_array[k*4]     = voxel_quad.x;
-        voxel_num_points_array[k*4 + 1] = voxel_quad.y;
-        voxel_num_points_array[k*4 + 2] = voxel_quad.z;
-        voxel_num_points_array[k*4 + 3] = voxel_quad.w;
+            voxel_num_points_array[k*4]     = voxel_quad.x;
+            voxel_num_points_array[k*4 + 1] = voxel_quad.y;
+            voxel_num_points_array[k*4 + 2] = voxel_quad.z;
+            voxel_num_points_array[k*4 + 3] = voxel_quad.w;
+        } else {
+            // Padding a zero se saltiamo fuori dalla memoria
+            voxel_num_points_array[k*4]     = 0;
+            voxel_num_points_array[k*4 + 1] = 0;
+            voxel_num_points_array[k*4 + 2] = 0;
+            voxel_num_points_array[k*4 + 3] = 0;
+        }
 
     }
 
@@ -312,7 +320,7 @@ int main(void) {
     Voxel* d_active_voxels;
     int*   d_num_active_voxels;
     // Calcola la dimensione allineata a 4 interi
-    int aligned_size = ((NUM_TOT_VOXELS + 3) / 4) * 4;
+    int aligned_size = NUM_INT4 * 4;
     CHECK(cudaMalloc(&d_voxels_num_points_output, aligned_size * sizeof(int)));
     CHECK(cudaMalloc(&d_active_voxels, aligned_size * sizeof(Voxel)));
     CHECK(cudaMalloc(&d_num_active_voxels, sizeof(int)));
