@@ -17,6 +17,9 @@
 
 #define DIM_VOXEL 0.2f
 
+#define ILP_FACTOR 16
+#define READS_PER_THREAD 4
+
 #define NUM_VOXELS_X ((int)((MAX_X - MIN_X)/DIM_VOXEL))
 #define NUM_VOXELS_Y ((int)((MAX_Y - MIN_Y)/DIM_VOXEL))
 #define NUM_VOXELS_Z ((int)((MAX_Z - MIN_Z)/DIM_VOXEL))
@@ -44,8 +47,9 @@ typedef struct {
   int k;
 } VoxelIndices;
 
-typedef struct alignas(16) {
-    int x, y, z, num_points;
+typedef struct alignas(8) {
+    short x, y, z;
+    short num_points;
 } Voxel;
 
 struct CallbackOldData {
