@@ -313,7 +313,7 @@ int main(void) {
     int*   d_num_active_voxels;
     // Calcola la dimensione allineata a 4 interi
     int aligned_size = ((NUM_TOT_VOXELS + 3) / 4) * 4;
-    CHECK(cudaMalloc(&d_voxels_num_points_output, NUM_TOT_VOXELS * sizeof(int)));
+    CHECK(cudaMalloc(&d_voxels_num_points_output, aligned_size * sizeof(int)));
     CHECK(cudaMalloc(&d_active_voxels, aligned_size * sizeof(Voxel)));
     CHECK(cudaMalloc(&d_num_active_voxels, sizeof(int)));
 
