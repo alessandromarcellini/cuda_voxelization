@@ -18,7 +18,7 @@
 #define DIM_VOXEL 0.2f
 
 #define ILP_FACTOR 16
-#define READS_PER_THREAD 4
+#define READS_WIDTH 4
 #define NUM_INT4 (NUM_TOT_VOXELS + 3) / 4
 
 #define NUM_VOXELS_X ((int)((MAX_X - MIN_X)/DIM_VOXEL))
