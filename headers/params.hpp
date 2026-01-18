@@ -2,12 +2,12 @@
 #define MAX_POINTS_PER_BUFFER 131100
 #define NUM_BUFFERS 1
 
-#define MAX_X 50 //34
-#define MAX_Y 50 // 22
-#define MAX_Z 10 // 3
-#define MIN_X -50 //-34
-#define MIN_Y -50 // -22
-#define MIN_Z -10 // -3
+#define MAX_X 50
+#define MAX_Y 50
+#define MAX_Z 10
+#define MIN_X -50
+#define MIN_Y -50
+#define MIN_Z -10
 
 #define MIN_POINTS_IN_VOXEL_TO_RENDER 0
 #define MAX_DENSITY_THRESHOLD 7.5f
@@ -16,16 +16,15 @@
 #define RENDERER_PORT 60000
 
 #define DIM_VOXEL 0.2f
-
-#define ILP_FACTOR 16
-#define READS_WIDTH 4
-#define NUM_INT4 (NUM_TOT_VOXELS + 3) / 4
+#define WARP_SIZE 32
+#define ILP_FACTOR 4
+#define TOT_READS_PER_WARP (WARP_SIZE * ILP_FACTOR)
 
 #define NUM_VOXELS_X ((int)((MAX_X - MIN_X)/DIM_VOXEL))
 #define NUM_VOXELS_Y ((int)((MAX_Y - MIN_Y)/DIM_VOXEL))
 #define NUM_VOXELS_Z ((int)((MAX_Z - MIN_Z)/DIM_VOXEL))
 
-#define NUM_TOT_VOXELS NUM_VOXELS_X * NUM_VOXELS_Y * NUM_VOXELS_Z
+#define NUM_TOT_VOXELS (NUM_VOXELS_X * NUM_VOXELS_Y * NUM_VOXELS_Z)
 
 #define DIRNAME "../new_dataset"
 

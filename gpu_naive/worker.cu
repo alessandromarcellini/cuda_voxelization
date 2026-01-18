@@ -8,8 +8,7 @@
 #include <cuda_runtime.h>
 #include "../headers/params.hpp"
 
-#define THREAD_BLOCK_SIZE_1D 512
-#define THREAD_BLOCK_SIZE_3D 8
+#define THREAD_BLOCK_SIZE_1D 256
 
 
 #define CHECK(call)                                                     \
@@ -81,10 +80,17 @@ __device__ int warpPrefixSum(int val, int& total_warp_sum) {
 }
 
 
+
 __global__ void extract_active_voxels(int* d_voxels, Voxel* d_active_voxels, int* d_num_active_voxels) {
     
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int base_input_idx = idx * ILP_FACTOR;
+
+    int lane = threadIdx.x & 31;
+    int warp_id = idx >> 5;
+
+    // base memory index for this warp
+    int warp_base = warp_id * (WARP_SIZE * ILP_FACTOR);
+    int base_input_idx = warp_base + lane;
 
     // --- 1. LETTURA (Invariata) ---
     // Usiamo variabili locali per evitare accessi spuri se siamo fuori range
@@ -96,24 +102,15 @@ __global__ void extract_active_voxels(int* d_voxels, Voxel* d_active_voxels, int
     bool is_valid_thread = (base_input_idx < NUM_TOT_VOXELS);
 
     if (is_valid_thread) {
-
         #pragma unroll
-        for (int i = 0; i < ILP_FACTOR / READS_WIDTH; i++){
+        for (int i = 0; i < ILP_FACTOR; i++){
 
-            int4 voxel_quad = reinterpret_cast<int4*>(d_voxels)[idx*READS_WIDTH + i]; 
-            voxel_num_points_array[i*READS_WIDTH]=voxel_quad.x;
-            voxel_num_points_array[i*READS_WIDTH + 1]=voxel_quad.y;
-            voxel_num_points_array[i*READS_WIDTH + 2]=voxel_quad.z;
-            voxel_num_points_array[i*READS_WIDTH + 3]=voxel_quad.w;
-
-        }
-
-        #pragma unroll
-        for (int i = 0; i < ILP_FACTOR; i++) {
-            if (base_input_idx + i < NUM_TOT_VOXELS && voxel_num_points_array[i] > MIN_POINTS_IN_VOXEL_TO_RENDER) {
+            voxel_num_points_array[i] = d_voxels[base_input_idx + i*WARP_SIZE];
+            if (voxel_num_points_array[i] > MIN_POINTS_IN_VOXEL_TO_RENDER) {
                 active_mask[i] = 1;
                 local_active_count++;
             }
+
         }
     }
 
@@ -145,7 +142,7 @@ __global__ void extract_active_voxels(int* d_voxels, Voxel* d_active_voxels, int
         #pragma unroll
         for (int i = 0; i < ILP_FACTOR; i++) {
             if (active_mask[i]) {
-                int temp = base_input_idx + i;
+                int temp = base_input_idx + i*WARP_SIZE;
                 int plane = NUM_VOXELS_X*NUM_VOXELS_Y;
                 int z = temp / plane;
                 int rem = temp - z*plane;
@@ -163,6 +160,7 @@ __global__ void extract_active_voxels(int* d_voxels, Voxel* d_active_voxels, int
         }
     }
 }
+
 
 int main(void) {
     
@@ -227,8 +225,9 @@ int main(void) {
     int* d_voxels_num_points_output;
     Voxel* d_active_voxels;
     int*   d_num_active_voxels;
-    // Calcola la dimensione allineata a 4 interi
-    int aligned_size = NUM_INT4  * 4;
+    // Calcola la dimensione allineata
+    int aligned_size = ((NUM_TOT_VOXELS + TOT_READS_PER_WARP - 1) / TOT_READS_PER_WARP) * TOT_READS_PER_WARP;
+    // cudaMalloc() garantisce allineamento almeno ad un indirizzo multiplo di 256B
     CHECK(cudaMalloc(&d_voxels_num_points_output, aligned_size * sizeof(int)));
     CHECK(cudaMalloc(&d_active_voxels, aligned_size * sizeof(Voxel)));
     CHECK(cudaMalloc(&d_num_active_voxels, sizeof(int)));
