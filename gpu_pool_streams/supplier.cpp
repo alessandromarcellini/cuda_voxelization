@@ -5,7 +5,6 @@
 #include <string.h>
 #include <math.h>
 #include <arpa/inet.h>
-
 #include "../headers/params.hpp"
 
 int compare_names(const void* a, const void* b) {
@@ -60,9 +59,8 @@ int main(void) {
     //per ogni frame
     char path_to_current_frame[512];
     FILE* current_frame;
-    float coordinates[FIELDS_PER_POINT];
-    Point point;
-    int i = 0;
+    Point* point_buffer = (Point*) malloc(POINT_BUFFER_DIM * sizeof(Point));
+    int i = 0, file_size = 0, total_bytes_sent = 0, el_read = 0, chunk_sent = 0, bytes_to_send = 0;;
 
     for (int f = 0; f < file_count; f++) {
         sprintf(path_to_current_frame, "%s/%s", DIRNAME, file_names[f]);
@@ -78,24 +76,39 @@ int main(void) {
         fseek(current_frame, 0, SEEK_END);
         long file_size = ftell(current_frame);
         fseek(current_frame, 0, SEEK_SET);
-        int num_points = file_size / (FIELDS_PER_POINT * sizeof(float));
+        int num_points = file_size / sizeof(Point);
 
         //invio numero punti
+        printf("Invio %d punti da elaborare al worker\n", num_points);
         send(sock, &num_points, sizeof(int), 0);
 
-        // Lettura
-        while (fread(coordinates, sizeof(float), FIELDS_PER_POINT, current_frame) == FIELDS_PER_POINT) {
-            point.x = coordinates[0];
-            point.y = coordinates[1];
-            point.z = coordinates[2];
+        total_bytes_sent = 0, bytes_to_send = 0;
+        
 
-            // manda tramite socket
-            send(sock, &point, sizeof(Point), 0);
+        while (total_bytes_sent < file_size) {
+            // Leggi dal file
+            el_read = fread(point_buffer, sizeof(Point), POINT_BUFFER_DIM, current_frame);
+            bytes_to_send = el_read * sizeof(Point);
+
+            if (bytes_to_send <= 0) { // evito di inviare byte spuri
+                break;
             }
-            fclose(current_frame);
 
-            printf("FINITO FILE %s\n", file_names[f]);
+            // Invio effettivo
+            chunk_sent = 0;
+            while (chunk_sent < bytes_to_send) {
+                int s = send(sock, ((char*)point_buffer) + chunk_sent, bytes_to_send - chunk_sent, 0);
+                if (s < 0) { perror("Errore send"); exit(1); }
+                chunk_sent += s;
+            }
+            total_bytes_sent += chunk_sent;
+        }
+
+        fclose(current_frame);
+        printf("FINITO FILE %s\n", file_names[f]);
     }
+
+    free(point_buffer);
     close(sock);
     
     // Free file name strings
