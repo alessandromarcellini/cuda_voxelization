@@ -42,7 +42,7 @@ do {                                                                    \
 // __restrict__ dice al compilatore che una certa area di memoria è modificata solo accedendovi con il puntatore ristretto
 
 __global__ void __launch_bounds__(THREAD_BLOCK_SIZE_1D) 
-voxelization_memory_optimized(const Point* __restrict__ d_input, int* __restrict__ d_num_points_output, int num_points) {
+voxelization(Point* __restrict__ d_input, int* __restrict__ d_num_points_output, int num_points) {
     
     // Calcolo indici base
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -297,20 +297,27 @@ int main(void) {
     int* d_voxels_num_points_output;
     Voxel* d_active_voxels;
     int*   d_num_active_voxels;
+    int*    h_num_active_voxels;
+    Voxel* h_active_voxels = (Voxel*) malloc(NUM_TOT_VOXELS * sizeof(Voxel));
+
     // cudaMalloc() garantisce allineamento almeno ad un indirizzo multiplo di 256B
+    CHECK(cudaMallocHost((void**)&curr_points, MAX_POINTS_PER_BUFFER * sizeof(Point)));
     CHECK(cudaMalloc(&d_input, ALIGNED_SIZE_VOXELIZATION * sizeof(Point)));
-    CHECK(cudaMemset(d_input, 0, ALIGNED_SIZE_VOXELIZATION * sizeof(Point)));
+    //CHECK(cudaMemset(d_input, 0, ALIGNED_SIZE_VOXELIZATION * sizeof(Point)));
     CHECK(cudaMalloc(&d_voxels_num_points_output, ALIGNED_SIZE_ACTIVE_VOXELS * sizeof(int)));
     CHECK(cudaMalloc(&d_active_voxels, ALIGNED_SIZE_ACTIVE_VOXELS * sizeof(Voxel)));
-    CHECK(cudaMalloc(&d_num_active_voxels, sizeof(int)));
 
-    Voxel* h_active_voxels = (Voxel*) malloc(NUM_TOT_VOXELS * sizeof(Voxel));
-    int    h_num_active_voxels;
+    // memoria zero-copy per il numero di voxel attivi
+    cudaSetDeviceFlags(cudaDeviceMapHost);
+    // Alloca memoria host pinned e mappata
+    cudaHostAlloc((void**)&h_num_active_voxels, sizeof(int), cudaHostAllocMapped);
+    // Ottieni il puntatore device alla stessa memoria
+    cudaHostGetDevicePointer((void**)&d_num_active_voxels, h_num_active_voxels, 0);
+
 
     while(recv(client_fd, &num_points, sizeof(int), 0) > 0) {
 
         printf("Ricevuti %d punti da elaborare.\n", num_points);
-        curr_points = (Point*) malloc(num_points * sizeof(Point));
 
         total_received = 0;
         bytes_expected = num_points * sizeof(Point);
@@ -320,9 +327,7 @@ int main(void) {
             total_received += received;
         }
         
-
         // -----------------------VOXELIZATION-------------------------------
-        // ALLOCAZIONE PUNTI
 
         CHECK(cudaMemcpy(d_input, curr_points, num_points * sizeof(Point), cudaMemcpyHostToDevice)); 
 
@@ -332,24 +337,22 @@ int main(void) {
         int num_chunks = (num_points + ILP_FACTOR - 1) / ILP_FACTOR;
         dim3 blockVox(THREAD_BLOCK_SIZE_1D);
         dim3 gridVox((num_chunks + THREAD_BLOCK_SIZE_1D - 1) / THREAD_BLOCK_SIZE_1D);
-        voxelization_memory_optimized<<<gridVox, blockVox>>>(d_input, d_voxels_num_points_output, num_points);
+        voxelization<<<gridVox, blockVox>>>(d_input, d_voxels_num_points_output, num_points);
         
         // LANCIO KERNEL active_voxels
-        CHECK(cudaMemset(d_num_active_voxels, 0, sizeof(int)));
+        (*h_num_active_voxels) = 0;
         num_chunks = (NUM_TOT_VOXELS + ILP_FACTOR - 1) / ILP_FACTOR;
         dim3 blockActiveVoxel(THREAD_BLOCK_SIZE_1D);
         dim3 gridActiveVoxel((num_chunks + THREAD_BLOCK_SIZE_1D - 1) / THREAD_BLOCK_SIZE_1D);
         extract_active_voxels<<<gridActiveVoxel, blockActiveVoxel>>>(d_voxels_num_points_output, d_active_voxels, d_num_active_voxels);
 
-
         // COPIA D2H risultati
-        CHECK(cudaMemcpy(&h_num_active_voxels, d_num_active_voxels, sizeof(int), cudaMemcpyDeviceToHost));
-        CHECK(cudaMemcpy(h_active_voxels, d_active_voxels, h_num_active_voxels * sizeof(Voxel), cudaMemcpyDeviceToHost));
+        CHECK(cudaMemcpy(h_active_voxels, d_active_voxels, (*h_num_active_voxels) * sizeof(Voxel), cudaMemcpyDeviceToHost));
 
 
         // -----------------------SEND TO RENDERER----------------------------
         int total_sent = 0;
-        int bytes_to_send = h_num_active_voxels * sizeof(Voxel);
+        int bytes_to_send = (*h_num_active_voxels) * sizeof(Voxel);
 
         if (send(renderer_fd, &h_num_active_voxels, sizeof(int), 0) < 0) {
             perror("Error sending active_count");
@@ -360,7 +363,6 @@ int main(void) {
         while (total_sent < bytes_to_send) {
             // Nota: usiamo 'sock' e il puntatore specifico passato nella struct
             int sent = send(renderer_fd, (char*)h_active_voxels + total_sent, bytes_to_send - total_sent, 0);
-
             if (sent < 0) {
                 perror("Error sending voxel data inside callback");
                 break;
@@ -369,17 +371,14 @@ int main(void) {
         }
 
         printf("Completato invio voxels. Totale: %d bytes.\n", total_sent);
-
-
-        //cleanUP
-        free(curr_points);
         
     }
 
+    CHECK(cudaFreeHost(curr_points));
+    CHECK(cudaFreeHost(h_num_active_voxels));
     CHECK(cudaFree(d_input));
     CHECK(cudaFree(d_voxels_num_points_output));
     CHECK(cudaFree(d_active_voxels));
-    CHECK(cudaFree(d_num_active_voxels));
     free(h_active_voxels);
     
     close(client_fd);

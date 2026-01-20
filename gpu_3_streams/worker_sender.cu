@@ -28,7 +28,24 @@
 #include "../headers/params.hpp"
 
 #define THREAD_BLOCK_SIZE_1D 256
-#define THREAD_BLOCK_SIZE_3D 8
+
+
+#ifndef __CUDACC__
+
+extern "C" {
+    // Definiamo i prototipi solo per l'IDE per togliere le righe rosse
+    __device__ unsigned int __match_any_sync(unsigned int mask, unsigned int value);
+    __device__ unsigned int __shfl_sync(unsigned int mask, int var, int srcLane, int width=32);
+    __device__ unsigned int __shfl_up_sync(unsigned int mask, int var, unsigned int delta, int width=32);
+    
+    __device__ int __popc(unsigned int x);
+    __device__ int __ffs(int x);
+    __device__ int __float2int_rd(float x);
+}
+
+#endif
+
+#define THREAD_BLOCK_SIZE_1D 256
 
 
 #define CHECK(call)                                                     \
@@ -43,11 +60,206 @@ do {                                                                    \
 } while (0)
 
 
+
+// __restrict__ dice al compilatore che una certa area di memoria è modificata solo accedendovi con il puntatore ristretto
+
+__global__ void __launch_bounds__(THREAD_BLOCK_SIZE_1D) 
+voxelization(Point* __restrict__ d_input, int* __restrict__ d_num_points_output, int num_points) {
+    
+    // Calcolo indici base
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int lane = threadIdx.x & 31;
+    int warp_id = idx >> 5;
+
+    // Ogni warp gestisce un blocco contiguo di memoria
+    int warp_base = warp_id * TOT_READS_PER_WARP;
+    int base_input_idx = warp_base + lane;
+
+    if (warp_base < num_points)
+        return;
+
+    const int warp_size = 32;
+    const float r_min_x = MIN_X;
+    const float r_min_y = MIN_Y;
+    const float r_min_z = MIN_Z;
+    const float r_inv_dim = INV_DIM_VOXEL;
+
+    const int r_num_vox_x = NUM_VOXELS_X;
+    const int r_num_vox_y = NUM_VOXELS_Y;
+    const int r_num_vox_z = NUM_VOXELS_Z;
+
+    // REGISTERS PREFETCH: Creiamo un buffer locale nei registri
+    Point local_points[ILP_FACTOR];
+
+    // 1. BURST LOAD (Prefetching)
+    // Carichiamo TUTTI i dati necessari per questo thread prima di processarli.
+    // Questo riempie la pipeline di memoria e riduce gli stalli durante il calcolo.
+    // NOTA: Assumiamo che d_input sia "padded" nel main, quindi rimuoviamo il check `current_idx < num_points`
+    // Se idx supera num_points reale, leggeremo spazzatura che verrà scartata dal check `inside`.
+    #pragma unroll
+    for (int i = 0; i < ILP_FACTOR; i++) {
+        // L'istruzione di Load viene emessa qui. La GPU passerà alla prossima istruzione
+        // senza aspettare che il dato arrivi, se possibile.
+        local_points[i] = d_input[base_input_idx + i * warp_size];
+    }
+
+    // 2. COMPUTE & AGGREGATE LOOP
+    #pragma unroll
+    for (int i = 0; i < ILP_FACTOR; i++) {
+        
+        Point p = local_points[i]; // Dato già nei registri (o in arrivo)
+
+        // Math (ALU) - Ora la pipeline ALU è piena mentre la memoria lavorava prima
+        int curr_voxel_x = __float2int_rd((p.x - r_min_x) * r_inv_dim);
+        int curr_voxel_y = __float2int_rd((p.y - r_min_y) * r_inv_dim);
+        int curr_voxel_z = __float2int_rd((p.z - r_min_z) * r_inv_dim);
+
+        // Controllo limiti (Branch predication friendly)
+        bool inside = (curr_voxel_x >= 0 && curr_voxel_x < r_num_vox_x) &&
+                      (curr_voxel_y >= 0 && curr_voxel_y < r_num_vox_y) &&
+                      (curr_voxel_z >= 0 && curr_voxel_z < r_num_vox_z);
+
+        // Usiamo __any_sync per vedere se ALMENO un thread nel warp deve lavorare.
+        // Se tutti i punti del warp sono fuori (es. padding finale), saltiamo tutto il blocco pesante.
+
+            
+        // Calcolo indice solo se serve, ma per evitare divergenza conviene calcolarlo dummy
+        if(inside) {
+            int voxel_idx = curr_voxel_z * (r_num_vox_x * r_num_vox_y) + 
+                        curr_voxel_y * r_num_vox_x + 
+                        curr_voxel_x;
+
+            // --- WARP AGGREGATION ---
+            // Matchiamo solo chi ha un indice valido e uguale
+            unsigned int match_mask = __match_any_sync(__activemask(), voxel_idx);
+
+            int aggregation_count = __popc(match_mask);
+            int leader_lane = __ffs(match_mask) - 1;
+
+            if (lane == leader_lane) {
+                atomicAdd(&d_num_points_output[voxel_idx], aggregation_count);
+            }
+        }
+    }
+}
+
+// Funzione device di supporto per calcolare l'offset locale nel warp
+__device__ int warpPrefixSum(int val, int& total_warp_sum) {
+    int laneId = threadIdx.x % 32;
+    int sum = val;
+    
+    // Somma i valori dei thread precedenti in log2(32) passi
+
+    // WARP INTRINSICS : __shfl_up_sync barriera di sincronizzazione a livello di warp
+    // la funzione __shfl guarda direttamente dentro i regsitri privati degli altri thread
+    // __shfl_up(mask, val, delta) legge il valore di val del thread con indice diminuito di delta (a sinistra)
+    // il sync serve per far eseguire ai thread specificati nella mask, nel nostro caso un warp intero
+    // la lettura contemporaneamente
+
+    int n = __shfl_up_sync(0xffffffff, sum, 1);
+    if (laneId >= 1) sum += n;
+    n = __shfl_up_sync(0xffffffff, sum, 2);
+    if (laneId >= 2) sum += n;
+    n = __shfl_up_sync(0xffffffff, sum, 4);
+    if (laneId >= 4) sum += n;
+    n = __shfl_up_sync(0xffffffff, sum, 8);
+    if (laneId >= 8) sum += n;
+    n = __shfl_up_sync(0xffffffff, sum, 16);
+    if (laneId >= 16) sum += n;
+    
+    // Il totale del warp si trova ora nell'ultimo thread (lane 31)
+    total_warp_sum = __shfl_sync(0xffffffff, sum, 31);
+    
+    // Ritorniamo l'offset
+    return sum - val;
+}
+
+
+__global__ void extract_active_voxels(int* d_voxels, Voxel* d_active_voxels, int* d_num_active_voxels) {
+    
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    int lane = threadIdx.x & 31;
+    int warp_id = idx >> 5;
+
+    // base memory index for this warp
+    int warp_base = warp_id * TOT_READS_PER_WARP;
+    int base_input_idx = warp_base + lane;
+
+    // --- 1. LETTURA (Invariata) ---
+    // Usiamo variabili locali per evitare accessi spuri se siamo fuori range
+    int voxel_num_points_array[ILP_FACTOR];
+    int active_mask[ILP_FACTOR] = {0};
+    int local_active_count = 0;
+
+    // Check bounds preliminare sicuro
+    bool is_valid_thread = (warp_base < ALIGNED_SIZE_ACTIVE_VOXELS);
+
+    if (is_valid_thread) {
+        #pragma unroll
+        for (int i = 0; i < ILP_FACTOR; i++){
+
+            voxel_num_points_array[i] = d_voxels[base_input_idx + i*WARP_SIZE];
+            if (voxel_num_points_array[i] > MIN_POINTS_IN_VOXEL_TO_RENDER) {
+                active_mask[i] = 1;
+                local_active_count++;
+            }
+
+        }
+    }
+
+    // --- 2. AGGREGAZIONE WARP ADD ---
+    
+    int warp_total_count = 0;
+    // Calcola dove scrivere RELATIVAMENTE all'inizio del blocco del warp
+    int my_warp_offset = warpPrefixSum(local_active_count, warp_total_count);
+    
+    int warp_global_start_idx = 0;
+    
+    // Solo il primo thread del warp (lane 0) fa la scrittura atomica in memoria
+    if ((threadIdx.x % 32) == 0 && warp_total_count > 0) {
+        warp_global_start_idx = atomicAdd(d_num_active_voxels, warp_total_count);
+    }
+    
+    // Distribuisce l'indirizzo base globale a tutti i thread del warp
+    // __shfl_sync è una lettura effettuata contemporaneamente da tutti i thread attivi nella maschera
+    // del valore val preso dal thread con indice 0 all'interno del warp
+
+    warp_global_start_idx = __shfl_sync(0xffffffff, warp_global_start_idx, 0);
+    
+    // Indice finale dove questo specifico thread inizierà a scrivere
+    int current_out_idx = warp_global_start_idx + my_warp_offset;
+
+
+    // --- 3. SCRITTURA COALESCED ---
+    if (is_valid_thread && local_active_count > 0) {
+        #pragma unroll
+        for (int i = 0; i < ILP_FACTOR; i++) {
+            if (active_mask[i]) {
+                int temp = base_input_idx + i*WARP_SIZE;
+                int plane = NUM_VOXELS_X*NUM_VOXELS_Y;
+                int z = temp / plane;
+                int rem = temp - z*plane;
+                int y = rem / NUM_VOXELS_X;
+                int x = rem - y*NUM_VOXELS_X;
+
+                short4 voxel_data = make_short4((short)x, (short)y, (short)z, (short)voxel_num_points_array[i]);
+                
+                // Scrittura all'indirizzo pre-calcolato
+                reinterpret_cast<short4*>(d_active_voxels)[current_out_idx] = voxel_data;
+                
+                // Avanzamento locale (per i prossimi voxel dello stesso thread)
+                current_out_idx++;
+            }
+        }
+    }
+}
+
+
 std::queue<CallbackData> full_voxel_buffers;
 std::mutex mtx;
 std::condition_variable queueCV;
 bool stop = false;
-
 
 
 void CUDART_CB callback(cudaStream_t stream, cudaError_t status, void *data) {
@@ -73,71 +285,6 @@ void CUDART_CB callback(cudaStream_t stream, cudaError_t status, void *data) {
     free(args);
 }
 
-__global__ void voxelization(Point* d_input, Voxel* d_output, int num_points) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= num_points) return;
-
-    Point point = d_input[idx];
-
-    // voxelize this point
-    int curr_voxel_x = (int)floor((point.x - MIN_X) / DIM_VOXEL);
-    int curr_voxel_y = (int)floor((point.y - MIN_Y) / DIM_VOXEL);
-    int curr_voxel_z = (int)floor((point.z - MIN_Z) / DIM_VOXEL);
-    
-    if(curr_voxel_x < 0 || curr_voxel_x >= NUM_VOXELS_X ||
-        curr_voxel_y < 0 || curr_voxel_y >= NUM_VOXELS_Y ||
-        curr_voxel_z < 0 || curr_voxel_z >= NUM_VOXELS_Z) {
-            // punto fuori dai limiti
-            return;
-    }
-
-    // calcolo indice array lineare voxel
-    int voxel_idx = curr_voxel_z * (NUM_VOXELS_X* NUM_VOXELS_Y) + curr_voxel_y * NUM_VOXELS_X + curr_voxel_x;
-    
-    atomicAdd(&d_output[voxel_idx].num_points, 1);
-
-}
-
-
-__global__ void extract_active_voxels(Voxel* d_voxels, Voxel* d_active_voxels, int* d_num_active_voxels) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= NUM_TOT_VOXELS) return;
-
-    int curr_voxel_final_num_points = d_voxels[idx].num_points;
-    if (curr_voxel_final_num_points > MIN_POINTS_IN_VOXEL_TO_RENDER) {
-        int out_idx = atomicAdd(d_num_active_voxels, 1);
-        d_active_voxels[out_idx] = d_voxels[idx];
-    }
-}
-
-__global__ void setup_voxels(Voxel* voxels) {
-
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int z = blockIdx.z * blockDim.z + threadIdx.z;
-
-    if (x >= NUM_VOXELS_X ||
-        y >= NUM_VOXELS_Y ||
-        z >= NUM_VOXELS_Z)
-        return;
-
-    int idx = z * (NUM_VOXELS_X * NUM_VOXELS_Y)
-            + y * NUM_VOXELS_X
-            + x;
-
-    voxels[idx].x = x;
-    voxels[idx].y = y;
-    voxels[idx].z = z;
-    voxels[idx].num_points = 0;
-}
-
-
-__global__ void reset_voxels(Voxel* voxels) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= NUM_TOT_VOXELS) return;
-
-    voxels[idx].num_points = 0;
-}
 
 void send_voxels(int sock_fd, cudaEvent_t* buffer_output_was_sent_events, cudaStream_t signal) {
 
@@ -247,7 +394,7 @@ int main(void) {
     Point* d_inputs[NUM_BUFFERS];
 
     // creating NUM_BUFFERS buffers for output voxels
-    Voxel* d_voxels_output[NUM_BUFFERS];
+    int* d_voxels_output[NUM_BUFFERS];
 
     // creating buffers to host active voxels on GPU
     Voxel* d_active_voxels[NUM_BUFFERS];
@@ -261,21 +408,13 @@ int main(void) {
         // alloco memoria host pinned sulla ram per i frame in input
         CHECK(cudaMallocHost((void**)&h_pinned_inputs[i], MAX_POINTS_PER_BUFFER * sizeof(Point)));
         // alloco memoria device per input
-        CHECK(cudaMalloc((void**)&d_inputs[i], MAX_POINTS_PER_BUFFER * sizeof(Point)));
+        CHECK(cudaMalloc((void**)&d_inputs[i], ALIGNED_SIZE_VOXELIZATION * sizeof(Point)));
 
         // alloco memoria device per output
-        CHECK(cudaMalloc((void**)&d_voxels_output[i], NUM_TOT_VOXELS * sizeof(Voxel)));
-
-        dim3 blockSetupVoxels(THREAD_BLOCK_SIZE_3D, THREAD_BLOCK_SIZE_3D, THREAD_BLOCK_SIZE_3D);
-        dim3 gridSetupVoxels(
-            (NUM_VOXELS_X + THREAD_BLOCK_SIZE_3D - 1) / THREAD_BLOCK_SIZE_3D,
-            (NUM_VOXELS_Y + THREAD_BLOCK_SIZE_3D - 1) / THREAD_BLOCK_SIZE_3D,
-            (NUM_VOXELS_Z + THREAD_BLOCK_SIZE_3D - 1) / THREAD_BLOCK_SIZE_3D
-        );
-        setup_voxels <<< gridSetupVoxels, blockSetupVoxels, 0, 0 >>>(d_voxels_output[i]);
+        CHECK(cudaMalloc((void**)&d_voxels_output[i], ALIGNED_SIZE_ACTIVE_VOXELS * sizeof(int)));
 
         //alloco memoria per contatori e voxel attivi
-        CHECK(cudaMalloc((void**)&d_active_voxels[i], NUM_TOT_VOXELS * sizeof(Voxel)));
+        CHECK(cudaMalloc((void**)&d_active_voxels[i], ALIGNED_SIZE_ACTIVE_VOXELS * sizeof(Voxel)));
         CHECK(cudaMalloc((void**)&d_num_active_voxels[i], sizeof(int)));
 
         CHECK(cudaMallocHost((void**)&h_active_voxels[i], NUM_TOT_VOXELS * sizeof(Voxel)));
@@ -340,27 +479,24 @@ int main(void) {
         
         cudaStreamWaitEvent(kernel, buffer_output_voxels_free_events[current_buffer], 0);
 
-        dim3 blockResetVoxels(THREAD_BLOCK_SIZE_1D);
-        dim3 gridResetVoxels((NUM_TOT_VOXELS + THREAD_BLOCK_SIZE_1D - 1) / THREAD_BLOCK_SIZE_1D);
-        reset_voxels<<<gridResetVoxels, blockResetVoxels, 0, kernel>>>(d_voxels_output[current_buffer]);
+        CHECK(cudaMemsetAsync(d_voxels_output[current_buffer], 0, ALIGNED_SIZE_ACTIVE_VOXELS * sizeof(int), kernel));
 
         cudaStreamWaitEvent(kernel, h2d_done_events[current_buffer], 0);
+        int num_chunks = (num_points + ILP_FACTOR - 1) / ILP_FACTOR;
         dim3 blockVox(THREAD_BLOCK_SIZE_1D);
-        dim3 gridVox((num_points + THREAD_BLOCK_SIZE_1D - 1) / THREAD_BLOCK_SIZE_1D);
+        dim3 gridVox((num_chunks + THREAD_BLOCK_SIZE_1D - 1) / THREAD_BLOCK_SIZE_1D);
         voxelization <<<gridVox, blockVox, 0, kernel>>>(d_inputs[current_buffer], d_voxels_output[current_buffer], num_points);
         cudaEventRecord(buffer_input_free_events[current_buffer], kernel);
         // -------------------------------------------------------------
+        
         // azzera contatore voxel attivi
         cudaStreamWaitEvent(kernel, buffer_output_active_voxels_free_events[current_buffer], 0);
-        CHECK(cudaMemsetAsync(d_num_active_voxels[current_buffer],
-                            0,
-                            sizeof(int),
-                            kernel));
+        CHECK(cudaMemsetAsync(d_num_active_voxels[current_buffer], 0, sizeof(int), kernel));
 
         // kernel di compattazione
+        num_chunks = (NUM_TOT_VOXELS + ILP_FACTOR - 1) / ILP_FACTOR;
         dim3 blockActiveVoxel(THREAD_BLOCK_SIZE_1D);
-        dim3 gridActiveVoxel((NUM_TOT_VOXELS + THREAD_BLOCK_SIZE_1D - 1) / THREAD_BLOCK_SIZE_1D);
-
+        dim3 gridActiveVoxel((num_chunks + THREAD_BLOCK_SIZE_1D - 1) / THREAD_BLOCK_SIZE_1D);
         extract_active_voxels<<<gridActiveVoxel, blockActiveVoxel, 0, kernel>>>(
             d_voxels_output[current_buffer],
             d_active_voxels[current_buffer],
@@ -374,13 +510,13 @@ int main(void) {
 
         cudaStreamWaitEvent(d2h, buffer_output_contains_result_events[current_buffer], 0);
         cudaStreamWaitEvent(d2h, buffer_output_was_sent_events[current_buffer], 0);
-        
+            
         //copia a host del numero di voxel attivi
         CHECK(cudaMemcpyAsync(&h_num_active_voxels[current_buffer],
-                      d_num_active_voxels[current_buffer],
-                      sizeof(int),
-                      cudaMemcpyDeviceToHost,
-                      d2h));
+                    d_num_active_voxels[current_buffer],
+                    sizeof(int),
+                    cudaMemcpyDeviceToHost,
+                    d2h));
         //copia a host dei voxel attivi
         CHECK(cudaMemcpyAsync(h_active_voxels[current_buffer],
                             d_active_voxels[current_buffer],
