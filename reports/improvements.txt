@@ -5,6 +5,9 @@ COSE FATTE PER OTTIMIZZARE:
 	4)
 	
 extract_active_voxels:
-	1) atomicAdd eseguita da un solo thread per warp
+	1) atomicAdd eseguita da un solo thread per warp (warp aggregation)
 	2) ILP fattore 16 (4 era ancora troppo poco) per aumentare le richieste di load contemporanee
-	3) coalescing usando grid-stride
+	3) coalescing tra dati
+
+voxelization:
+

@@ -9,19 +9,6 @@
 #include "../headers/params.hpp"
 
 
-int compare_names(const void* a, const void* b) {
-    const char* name_a = *(const char**)a;
-    const char* name_b = *(const char**)b;
-    return strcmp(name_a, name_b);
-}
-
-int calculate_num_points(FILE* file) {
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    return file_size / (FIELDS_PER_POINT * sizeof(float));
-}
-
 VoxelIndices calculate_voxel_indices(Point point) {
     VoxelIndices result;
     result.i = (int)floor((point.x - MIN_X) / DIM_VOXEL);

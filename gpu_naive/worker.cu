@@ -157,12 +157,12 @@ __global__ void extract_active_voxels(int* d_voxels, Voxel* d_active_voxels, int
     
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    int lane = threadIdx.x & 31;
-    int warp_id = idx >> 5;
+    int lane = threadIdx.x & 31; // thread idx inside warp
+    int warp_id = idx >> 5; // divisione per 32 => id del warp all'interno del blocco
 
     // base memory index for this warp
-    int warp_base = warp_id * TOT_READS_PER_WARP;
-    int base_input_idx = warp_base + lane;
+    int warp_base = warp_id * (WARP_SIZE * ILP_FACTOR); // indice di memoria del primo elemento che deve gestire il warp
+    int base_input_idx = warp_base + lane; // indice di memoria che il thread corrente deve gestire
 
     // --- 1. LETTURA (Invariata) ---
     // Usiamo variabili locali per evitare accessi spuri se siamo fuori range
@@ -171,7 +171,7 @@ __global__ void extract_active_voxels(int* d_voxels, Voxel* d_active_voxels, int
     int local_active_count = 0;
 
     // Check bounds preliminare sicuro
-    bool is_valid_thread = (warp_base < ALIGNED_SIZE_ACTIVE_VOXELS);
+    bool is_valid_thread = (warp_base < NUM_TOT_VOXELS);
 
     if (is_valid_thread) {
         #pragma unroll
@@ -215,12 +215,13 @@ __global__ void extract_active_voxels(int* d_voxels, Voxel* d_active_voxels, int
         for (int i = 0; i < ILP_FACTOR; i++) {
             if (active_mask[i]) {
                 int temp = base_input_idx + i*WARP_SIZE;
+                //calcolo coordinate del voxel
                 int plane = NUM_VOXELS_X*NUM_VOXELS_Y;
                 int z = temp / plane;
                 int rem = temp - z*plane;
                 int y = rem / NUM_VOXELS_X;
                 int x = rem - y*NUM_VOXELS_X;
-
+                
                 short4 voxel_data = make_short4((short)x, (short)y, (short)z, (short)voxel_num_points_array[i]);
                 
                 // Scrittura all'indirizzo pre-calcolato
