@@ -485,7 +485,7 @@ int main(void) {
         CHECK(cudaMalloc((void**)&d_active_voxels[i], ALIGNED_SIZE_ACTIVE_VOXELS * sizeof(Voxel)));
         CHECK(cudaMalloc((void**)&d_num_active_voxels[i], sizeof(int)));
 
-        CHECK(cudaMallocHost((void**)&h_active_voxels[i], NUM_TOT_VOXELS * sizeof(Voxel)));
+        CHECK(cudaMallocHost((void**)&h_active_voxels[i], MAX_POINTS_PER_BUFFER * sizeof(Voxel)));
     }
 
 
@@ -565,7 +565,7 @@ int main(void) {
         //copia a host dei voxel attivi
         CHECK(cudaMemcpyAsync(h_active_voxels[current_stream],
                             d_active_voxels[current_stream],
-                            NUM_TOT_VOXELS * sizeof(Voxel),
+                            MAX_POINTS_PER_BUFFER * sizeof(Voxel),
                             cudaMemcpyDeviceToHost,
                             streams[current_stream]));
 
@@ -593,6 +593,7 @@ int main(void) {
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
         CHECK(cudaStreamDestroy(streams[i]));
+        CHECK(cudaStreamDestroy(signal));
     }
 
 

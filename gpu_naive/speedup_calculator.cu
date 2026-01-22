@@ -1,3 +1,7 @@
+
+//      SPEEDUP GPU NAIVE
+
+
 // open 10 files and read them putting them into memory.
 
 //5x esecuzione cpu in cui calcoli il tempo di esecuzione con std::chrono::high_resolution_clock e lo aggiungi ad un accumulatore
