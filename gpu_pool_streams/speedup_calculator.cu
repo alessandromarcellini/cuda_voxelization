@@ -591,6 +591,7 @@ int main(void) {
         cudaEventRecord(start, signal);
         //calc start time
         // for each file to process
+        i = 0;
         for (int k = 0; k < NUM_FILES_TO_PROCESS; k++) {
             // put in here computations that are inside the while loop on worker.cu of gpu 3 streams
             current_stream = i % NUM_BUFFERS;
@@ -676,8 +677,8 @@ int main(void) {
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
         CHECK(cudaStreamDestroy(streams[i]));
-        CHECK(cudaStreamDestroy(signal));
     }
+    CHECK(cudaStreamDestroy(signal));
 
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
