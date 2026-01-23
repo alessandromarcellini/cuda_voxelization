@@ -595,8 +595,9 @@ int main(void) {
 
     for(int l = 0; l < NUM_TESTS; l++) {
         printf("\t[GPU] TEST NUMBER %d\n", l +1);
-        cudaEventRecord(start, d2h);
+        cudaEventRecord(start, signal);
         //calc start time
+        i = 0;
         // for each file to process
         for (int k = 0; k < NUM_FILES_TO_PROCESS; k++) {
             // put in here computations that are inside the while loop on worker.cu of gpu 3 streams
@@ -686,12 +687,14 @@ int main(void) {
             // Quando lo stream arriva qui, eseguirà send_socket passando cb_args
             CHECK(cudaStreamAddCallback(d2h, callback, (void*)cb_args, 0));
 
+            cudaEventRecord(buffer_output_was_sent_events[current_buffer], d2h);
+
             // --- FINE BLOCCO CALLBACK ---
             i++;                
         }
 
         cudaDeviceSynchronize();
-        cudaEventRecord(stop);
+        cudaEventRecord(stop, signal);
         cudaEventSynchronize(stop);
 
         float gpu_total_time;
