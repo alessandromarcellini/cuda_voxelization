@@ -1,0 +1,24 @@
+==31272== Profiling result:
+            Type  Time(%)      Time     Calls       Avg       Min       Max  Name
+ GPU activities:   41.48%  4.2240ms        10  422.40us  420.79us  423.51us  [CUDA memset]
+                   37.13%  3.7809ms        10  378.09us  361.01us  392.41us  extract_active_voxels(int*, Voxel*, int*)
+                   20.90%  2.1280ms        10  212.80us  205.50us  224.60us  [CUDA memcpy HtoD]
+                    0.50%  50.720us        10  5.0720us  2.9120us  6.1120us  voxelization(Point*, int*, int)
+      API calls:   90.46%  92.665ms         1  92.665ms  92.665ms  92.665ms  cudaMallocHost
+                    2.61%  2.6716ms         3  890.53us  120.27us  2.3026ms  cudaFree
+                    2.38%  2.4337ms        20  121.68us     214ns  268.52us  cudaMemcpy
+                    1.42%  1.4496ms         2  724.82us  325.10us  1.1245ms  cudaFreeHost
+                    1.11%  1.1361ms         1  1.1361ms  1.1361ms  1.1361ms  cudaHostAlloc
+                    1.04%  1.0653ms         3  355.11us  119.53us  731.64us  cudaMalloc
+                    0.62%  638.39us        20  31.919us  4.1940us  483.65us  cudaLaunchKernel
+                    0.20%  209.63us        10  20.962us  14.562us  61.186us  cudaMemset
+                    0.13%  129.49us       114  1.1350us     103ns  52.766us  cuDeviceGetAttribute
+                    0.01%  11.957us         1  11.957us  11.957us  11.957us  cuDeviceGetName
+                    0.01%  11.551us         1  11.551us  11.551us  11.551us  cudaSetDeviceFlags
+                    0.01%  5.4210us         1  5.4210us  5.4210us  5.4210us  cuDeviceGetPCIBusId
+                    0.00%  3.8920us         2  1.9460us  1.1120us  2.7800us  cuDeviceGet
+                    0.00%  2.3310us         1  2.3310us  2.3310us  2.3310us  cudaHostGetDevicePointer
+                    0.00%  1.9410us         3     647ns     142ns  1.5150us  cuDeviceGetCount
+                    0.00%     730ns         1     730ns     730ns     730ns  cuDeviceTotalMem
+                    0.00%     449ns         1     449ns     449ns     449ns  cuModuleGetLoadingMode
+                    0.00%     251ns         1     251ns     251ns     251ns  cuDeviceGetUuid
