@@ -1,6 +1,4 @@
 *.bin
 dataset
-new_dataset
 builds
 audi_dataset
-second_dataset
