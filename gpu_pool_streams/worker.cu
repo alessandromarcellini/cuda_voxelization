@@ -582,6 +582,8 @@ int main(void) {
     
     // CLEANUP
 
+    CHECK(cudaDeviceSynchronize());
+
     // shutdown thread sender
     {
         std::lock_guard<std::mutex> lock(mtx);
@@ -593,8 +595,8 @@ int main(void) {
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
         CHECK(cudaStreamDestroy(streams[i]));
-        CHECK(cudaStreamDestroy(signal));
     }
+    CHECK(cudaStreamDestroy(signal));
 
 
     for (int i = 0; i < NUM_BUFFERS; i++) {
