@@ -3,56 +3,74 @@
 in vec3 Normal;
 in vec3 FragPos;
 
+uniform float voxelDensity; 
+uniform vec3 viewPos;
+
 out vec4 color;
 
-uniform float voxelDensity; // Valore tra 0.0 e 1.0
+// Palette "Termica" ad alto contrasto (Manuale per controllo preciso)
+// 0.0 -> Blu scuro (Sfondo/Rumore)
+// 0.5 -> Verde/Giallo (Struttura)
+// 1.0 -> Rosso/Bianco (Oggetti solidi)
+vec3 getHighContrastColor(float t) {
+    vec3 col0 = vec3(0.0, 0.0, 0.3); // Blu Scuro (Low density)
+    vec3 col1 = vec3(0.0, 0.8, 0.8); // Ciano (Mid density)
+    vec3 col2 = vec3(1.0, 1.0, 0.0); // Giallo (High density)
+    vec3 col3 = vec3(1.0, 0.0, 0.0); // Rosso (Max density)
 
-vec3 getHeatmapColor(float t) {
-    // Definizione dei colori "Aggressivi"
-    vec3 color0 = vec3(0.0, 0.0, 0.2); // 0.0: Blu Notte profondo (Sfondo)
-    vec3 color1 = vec3(0.6, 0.0, 0.0); // 0.33: Rosso Sangue
-    vec3 color2 = vec3(1.0, 0.5, 0.0); // 0.66: Arancione vivo
-    vec3 color3 = vec3(1.0, 1.0, 0.8); // 1.0: Bianco/Giallo accecante (Nucleo)
-
-    vec3 finalColor;
-
-    // Interpolazione a 3 stadi
+    vec3 res;
     if (t < 0.33) {
-        // Da Blu a Rosso (rimappa t da 0.0-0.33 a 0.0-1.0)
-        finalColor = mix(color0, color1, t * 3.0);
-    } 
-    else if (t < 0.66) {
-        // Da Rosso a Arancione
-        finalColor = mix(color1, color2, (t - 0.33) * 3.0);
-    } 
-    else {
-        // Da Arancione a Bianco
-        finalColor = mix(color2, color3, (t - 0.66) * 3.0);
+        res = mix(col0, col1, t * 3.0);
+    } else if (t < 0.66) {
+        res = mix(col1, col2, (t - 0.33) * 3.0);
+    } else {
+        res = mix(col2, col3, (t - 0.66) * 3.0);
     }
-    
-    return finalColor;
+    return res;
 }
 
-
 void main(){
-
+    // 1. CONTRASTO DENSITÀ (Cruciale)
+    // Elevando a potenza (es. 2.0), schiacciamo i valori bassi verso lo zero.
+    // Questo "pulisce" il rumore e fa risaltare solo i punti veramente densi.
     float t = clamp(voxelDensity, 0.0, 1.0);
-    // t = pow(t, 1.2);
+    float contrastT = pow(t, 2.0); // Aumenta questo valore (es. 3.0) per isolare ancora di più gli oggetti
 
-    vec3 objectColor = getHeatmapColor(t);
+    // 2. COLORE BASE
+    vec3 objectColor = getHighContrastColor(contrastT);
 
-    // 2. CALCOLO DELLA LUCE
-    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5)); 
+    // 3. LUCI (Ridotte per evitare il bianco eccessivo)
     vec3 norm = normalize(Normal);
-    
-    // DIFFUSIONE OMBRE (Lambert)
-    float diff = max(dot(norm, lightDir), 0.0);
-    
-    // LUCE AMBIENTE (luce base per non avere neri totali)
-    float ambient = 0.3;
-    
-    vec3 result = (ambient + diff) * objectColor;
+    vec3 lightDir = normalize(vec3(0.2, 1.0, 0.3)); // Luce dall'alto
+    vec3 viewDir = normalize(viewPos - FragPos);
 
-    // Output con alpha fisso (o variabile se vuoi trasparenza)
-    color = vec4(result, 0.3 + voxelDensity * 0.7); 
+    // Ambientale molto bassa per mantenere i colori scuri scuri
+    float ambientStrength = 0.15;
+    vec3 ambient = ambientStrength * objectColor;
+
+    // Diffusa classica
+    float diff = max(dot(norm, lightDir), 0.0);
+    vec3 diffuse = diff * objectColor * 0.8; // Moltiplico per 0.8 per scurire un po'
+
+    // Speculare (Riflesso) - Più stretto e meno intenso
+    vec3 halfwayDir = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(norm, halfwayDir), 0.0), 64.0); // 64 = riflesso più piccolo e netto
+    vec3 specular = vec3(0.5) * spec; // Speculare grigia, non bianca pura
+
+    // Rim Lighting (Bordi) - Solo sugli oggetti molto densi
+    // Se la densità è bassa, niente rim light (evita l'effetto "nuvola luminosa")
+    float rim = 1.0 - max(dot(viewDir, norm), 0.0);
+    rim = smoothstep(0.6, 1.0, rim) * contrastT; 
+    vec3 rimColor = vec3(0.5) * rim;
+
+    // 4. COMBINAZIONE
+    vec3 result = ambient + diffuse + specular + rimColor;
+
+    // 5. ALPHA (Trasparenza aggressiva)
+    // Se la densità è bassa (< 0.2), rendilo quasi invisibile.
+    // Se è alta, rendilo totalmente opaco.
+    float alpha = smoothstep(0.05, 0.8, t); 
+    
+    // Output
+    color = vec4(result, alpha);
 }

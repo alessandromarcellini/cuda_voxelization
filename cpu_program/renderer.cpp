@@ -22,6 +22,14 @@ int main() {
 		return -1;
 	}
 
+    // Abilita il Depth Test (già standard, ma assicuriamoci)
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS); 
+
+    // Abilita il Blending per la trasparenza definita nella shader
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
 	glfwWindowHint(GLFW_SAMPLES, 4);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -67,6 +75,7 @@ int main() {
     GLuint MatrixID = glGetUniformLocation(programID, "MVP");
     GLuint ModelMatrixID = glGetUniformLocation(programID, "Model"); 
     GLuint DensityID = glGetUniformLocation(programID, "voxelDensity");
+    GLuint ViewPosID = glGetUniformLocation(programID, "viewPos");
 
 	// The vertices. Three consecutive floats give a 3D vertex; Three consecutive vertices give a triangle.
 	// A cube has 6 faces with 2 triangles each, so this makes 6*2=12 triangles, and 12*3 vertices
@@ -157,7 +166,6 @@ int main() {
         (MIN_Y + MAX_Y) * 0.5f,   // 0
         1.0f                      // camera height
     );
-
 
     // Forward direction
     glm::vec3 forward(1.0f, 0.0f, 0.0f);
@@ -341,6 +349,10 @@ int main() {
                 // 3. Densità per il colore (Heatmap)
                 float density = (float)active_voxels[i].num_points / (float)MAX_DENSITY_THRESHOLD;
                 glUniform1f(DensityID, density);
+
+                // Invia la posizione della camera alla shader
+                glUniform3f(ViewPosID, cameraPos.x, cameraPos.y, cameraPos.z);
+
 
                 glDrawArrays(GL_TRIANGLES, 0, 12*3);
             }
