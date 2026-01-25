@@ -1,14 +1,14 @@
 #define FIELDS_PER_POINT 4
 #define MAX_POINTS_PER_BUFFER 255000
-#define NUM_BUFFERS 
+#define NUM_BUFFERS 3
 #define POINT_BUFFER_DIM 8192
 
-#define MAX_X 40 //34
-#define MAX_Y 30 // 22
-#define MAX_Z 5 // 3
-#define MIN_X -40 //-34
-#define MIN_Y -30 // -22
-#define MIN_Z -5 // -3
+#define MAX_X 50 //34
+#define MAX_Y 50 // 22
+#define MAX_Z 10 // 3
+#define MIN_X -50 //-34
+#define MIN_Y -50 // -22
+#define MIN_Z -10 // -3
 
 #define MIN_POINTS_IN_VOXEL_TO_RENDER 0
 #define MAX_DENSITY_THRESHOLD 6.0f
