@@ -46,7 +46,7 @@ int main(void) {
     char* file_names[10000];
     int file_count = 0;
     while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || strcmp(entry->d_name, ".ipynb_checkpoints") == 0)
             continue;
         file_names[file_count] = strdup(entry->d_name);
         file_count++;

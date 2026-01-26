@@ -102,7 +102,7 @@ voxelization(Point* __restrict__ d_input, int* __restrict__ d_num_points_output,
     const int r_num_vox_z = NUM_VOXELS_Z;
 
     // REGISTERS PREFETCH: Creiamo un buffer locale nei registri
-    Point local_points[ILP_FACTOR];
+    float4 local_points[ILP_FACTOR];
 
     // 1. BURST LOAD (Prefetching)
     // Carichiamo TUTTI i dati necessari per questo thread prima di processarli.
@@ -113,19 +113,17 @@ voxelization(Point* __restrict__ d_input, int* __restrict__ d_num_points_output,
     for (int i = 0; i < ILP_FACTOR; i++) {
         // L'istruzione di Load viene emessa qui. La GPU passerà alla prossima istruzione
         // senza aspettare che il dato arrivi, se possibile.
-        local_points[i] = d_input[base_input_idx + i * warp_size];
+        local_points[i] = ((float4*)d_input)[base_input_idx + i * warp_size];
     }
 
     // 2. COMPUTE & AGGREGATE LOOP
     #pragma unroll
     for (int i = 0; i < ILP_FACTOR; i++) {
-        
-        Point p = local_points[i]; // Dato già nei registri (o in arrivo)
 
         // Math (ALU) - Ora la pipeline ALU è piena mentre la memoria lavorava prima
-        int curr_voxel_x = __float2int_rd((p.x - r_min_x) * r_inv_dim);
-        int curr_voxel_y = __float2int_rd((p.y - r_min_y) * r_inv_dim);
-        int curr_voxel_z = __float2int_rd((p.z - r_min_z) * r_inv_dim);
+        int curr_voxel_x = __float2int_rd((local_points[i].x - r_min_x) * r_inv_dim);
+        int curr_voxel_y = __float2int_rd((local_points[i].y - r_min_y) * r_inv_dim);
+        int curr_voxel_z = __float2int_rd((local_points[i].z - r_min_z) * r_inv_dim);
 
         // Controllo limiti (Branch predication friendly)
         bool inside = (curr_voxel_x >= 0 && curr_voxel_x < r_num_vox_x) &&
@@ -150,11 +148,13 @@ voxelization(Point* __restrict__ d_input, int* __restrict__ d_num_points_output,
             int leader_lane = __ffs(match_mask) - 1;
 
             if (lane == leader_lane) {
+                // accessi sparsed in global memory per natura problema e acquisizioni punti da lidar
                 atomicAdd(&d_num_points_output[voxel_idx], aggregation_count);
             }
         }
     }
 }
+
 
 // Funzione device di supporto per calcolare l'offset locale nel warp
 __device__ int warpPrefixSum(int val, int& total_warp_sum) {

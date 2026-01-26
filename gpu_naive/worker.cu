@@ -67,7 +67,7 @@ voxelization(Point* __restrict__ d_input, int* __restrict__ d_num_points_output,
     const int r_num_vox_z = NUM_VOXELS_Z;
 
     // REGISTERS PREFETCH: Creiamo un buffer locale nei registri
-    Point local_points[ILP_FACTOR];
+    float4 local_points[ILP_FACTOR];
 
     // 1. BURST LOAD (Prefetching)
     // Carichiamo TUTTI i dati necessari per questo thread prima di processarli.
@@ -78,19 +78,17 @@ voxelization(Point* __restrict__ d_input, int* __restrict__ d_num_points_output,
     for (int i = 0; i < ILP_FACTOR; i++) {
         // L'istruzione di Load viene emessa qui. La GPU passerà alla prossima istruzione
         // senza aspettare che il dato arrivi, se possibile.
-        local_points[i] = d_input[base_input_idx + i * warp_size];
+        local_points[i] = ((float4*)d_input)[base_input_idx + i * warp_size];
     }
 
     // 2. COMPUTE & AGGREGATE LOOP
     #pragma unroll
     for (int i = 0; i < ILP_FACTOR; i++) {
-        
-        Point p = local_points[i]; // Dato già nei registri (o in arrivo)
 
         // Math (ALU) - Ora la pipeline ALU è piena mentre la memoria lavorava prima
-        int curr_voxel_x = __float2int_rd((p.x - r_min_x) * r_inv_dim);
-        int curr_voxel_y = __float2int_rd((p.y - r_min_y) * r_inv_dim);
-        int curr_voxel_z = __float2int_rd((p.z - r_min_z) * r_inv_dim);
+        int curr_voxel_x = __float2int_rd((local_points[i].x - r_min_x) * r_inv_dim);
+        int curr_voxel_y = __float2int_rd((local_points[i].y - r_min_y) * r_inv_dim);
+        int curr_voxel_z = __float2int_rd((local_points[i].z - r_min_z) * r_inv_dim);
 
         // Controllo limiti (Branch predication friendly)
         bool inside = (curr_voxel_x >= 0 && curr_voxel_x < r_num_vox_x) &&
@@ -115,6 +113,7 @@ voxelization(Point* __restrict__ d_input, int* __restrict__ d_num_points_output,
             int leader_lane = __ffs(match_mask) - 1;
 
             if (lane == leader_lane) {
+                // accessi sparsed in global memory per natura problema e acquisizioni punti da lidar
                 atomicAdd(&d_num_points_output[voxel_idx], aggregation_count);
             }
         }
@@ -176,13 +175,11 @@ __global__ void extract_active_voxels(int* d_voxels, Voxel* d_active_voxels, int
     if (is_valid_thread) {
         #pragma unroll
         for (int i = 0; i < ILP_FACTOR; i++){
-
             voxel_num_points_array[i] = d_voxels[base_input_idx + i*WARP_SIZE];
             if (voxel_num_points_array[i] > MIN_POINTS_IN_VOXEL_TO_RENDER) {
                 active_mask[i] = 1;
                 local_active_count++;
             }
-
         }
     }
 
@@ -298,22 +295,17 @@ int main(void) {
     int* d_voxels_num_points_output;
     Voxel* d_active_voxels;
     int*   d_num_active_voxels;
-    int*    h_num_active_voxels;
-    Voxel* h_active_voxels = (Voxel*) malloc(NUM_TOT_VOXELS * sizeof(Voxel));
+    int* h_num_active_voxels;
+    Voxel* h_active_voxels = (Voxel*) malloc(MAX_POINTS_PER_BUFFER * sizeof(Voxel));
 
     // cudaMalloc() garantisce allineamento almeno ad un indirizzo multiplo di 256B
     CHECK(cudaMallocHost((void**)&curr_points, MAX_POINTS_PER_BUFFER * sizeof(Point)));
+    CHECK(cudaMallocHost((void**)&h_num_active_voxels, sizeof(int)));
     CHECK(cudaMalloc(&d_input, ALIGNED_SIZE_VOXELIZATION * sizeof(Point)));
     //CHECK(cudaMemset(d_input, 0, ALIGNED_SIZE_VOXELIZATION * sizeof(Point)));
     CHECK(cudaMalloc(&d_voxels_num_points_output, ALIGNED_SIZE_ACTIVE_VOXELS * sizeof(int)));
     CHECK(cudaMalloc(&d_active_voxels, ALIGNED_SIZE_ACTIVE_VOXELS * sizeof(Voxel)));
-
-    // memoria zero-copy per il numero di voxel attivi
-    cudaSetDeviceFlags(cudaDeviceMapHost);
-    // Alloca memoria host pinned e mappata
-    cudaHostAlloc((void**)&h_num_active_voxels, sizeof(int), cudaHostAllocMapped);
-    // Ottieni il puntatore device alla stessa memoria
-    cudaHostGetDevicePointer((void**)&d_num_active_voxels, h_num_active_voxels, 0);
+    CHECK(cudaMalloc(&d_num_active_voxels, sizeof(int)));
 
 
     while(recv(client_fd, &num_points, sizeof(int), 0) > 0) {
@@ -341,15 +333,15 @@ int main(void) {
         voxelization<<<gridVox, blockVox>>>(d_input, d_voxels_num_points_output, num_points);
         
         // LANCIO KERNEL active_voxels
-        (*h_num_active_voxels) = 0;
-        num_chunks = (NUM_TOT_VOXELS + ILP_FACTOR - 1) / ILP_FACTOR;
+        CHECK(cudaMemset(d_num_active_voxels, 0, sizeof(int)));
+        num_chunks = (ALIGNED_SIZE_ACTIVE_VOXELS + ILP_FACTOR - 1) / ILP_FACTOR;
         dim3 blockActiveVoxel(THREAD_BLOCK_SIZE_1D);
         dim3 gridActiveVoxel((num_chunks + THREAD_BLOCK_SIZE_1D - 1) / THREAD_BLOCK_SIZE_1D);
         extract_active_voxels<<<gridActiveVoxel, blockActiveVoxel>>>(d_voxels_num_points_output, d_active_voxels, d_num_active_voxels);
 
         // COPIA D2H risultati
+        CHECK(cudaMemcpy(h_num_active_voxels, d_num_active_voxels, sizeof(int), cudaMemcpyDeviceToHost));
         CHECK(cudaMemcpy(h_active_voxels, d_active_voxels, (*h_num_active_voxels) * sizeof(Voxel), cudaMemcpyDeviceToHost));
-
 
         // -----------------------SEND TO RENDERER----------------------------
         int total_sent = 0;
@@ -379,6 +371,7 @@ int main(void) {
     CHECK(cudaFreeHost(h_num_active_voxels));
     CHECK(cudaFree(d_input));
     CHECK(cudaFree(d_voxels_num_points_output));
+    CHECK(cudaFree(d_num_active_voxels));
     CHECK(cudaFree(d_active_voxels));
     free(h_active_voxels);
     
