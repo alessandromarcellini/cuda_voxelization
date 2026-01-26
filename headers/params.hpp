@@ -1,6 +1,6 @@
 #define FIELDS_PER_POINT 4
 #define MAX_POINTS_PER_BUFFER 131100
-#define NUM_BUFFERS 3
+#define NUM_BUFFERS 10
 #define POINT_BUFFER_DIM 512
 
 #define MAX_X 50
