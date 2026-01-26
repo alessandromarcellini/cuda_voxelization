@@ -37,7 +37,6 @@ __global__ void vectorGeneration(float4* d_vectors) {
     int width_x = NUM_VOXELS_X; 
     int width_y = NUM_VOXELS_Y;
 
-    // Calcolo indice basato sulla geometria REALE della memoria
     int idx = z * (width_x * width_y) + y * width_x + x;
 
     float4 vector = {
@@ -64,18 +63,16 @@ int main() {
 		return -1;
 	}
     
-    // Abilita il Depth Test (già standard, ma assicuriamoci)
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS); 
 
-    // Abilita il Blending per la trasparenza definita nella shader
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 	glfwWindowHint(GLFW_SAMPLES, 4);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE); // To make macOS happy; should not be needed
+	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
 	// Open a window and create its OpenGL context
@@ -313,7 +310,7 @@ int main() {
 
             int bytes_expected = active_count * sizeof(Voxel);
             int total_received = 0;
-            char* ptr_buffer = (char*)active_voxels; // Importante: cast a char* per aritmetica dei puntatori   
+            char* ptr_buffer = (char*)active_voxels;
             
             while (total_received < bytes_expected) {
                 int received = recv(client_fd, ptr_buffer + total_received, bytes_expected - total_received, 0);

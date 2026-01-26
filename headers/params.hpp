@@ -26,7 +26,7 @@
 
 #define DIRNAME "../new_dataset"
 
-#define FRAMEDURATION 0.0f // 10 FPS
+#define FRAMEDURATION 0.0f
 
 #define WINDOWNAME "GPU Voxelization"
 
@@ -54,14 +54,14 @@ typedef struct {
 } Voxel;
 
 struct CallbackOldData {
-    int socket_fd;    // Il socket su cui inviare i dati
-    void* buffer_ptr;    // Il puntatore al buffer da inviare
-    int* active_count;    // Numero di voxel attivi nel buffer
-    int buffer_id;        // ID del buffer
+    int socket_fd;
+    void* buffer_ptr;
+    int* active_count;
+    int buffer_id;
 };
 
 typedef struct {
-    void* buffer_ptr;    // Il puntatore al buffer da inviare
-    int* active_count;    // Numero di voxel attivi nel buffer
-    int buff_id;        // ID del buffer
+    void* buffer_ptr;
+    int* active_count;
+    int buff_id;
 } CallbackData;

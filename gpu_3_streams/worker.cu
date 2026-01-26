@@ -1,18 +1,3 @@
-// 3 streams:
-//  - 1 H2D
-//  - 1 Kernel
-//  - 1 D2H
-
-// uso memoria host pinned per trasfermenti + malloc iniziale
-
-// uso di cuda events per sincronizzare gli stream tra loro
-
-// allocazione del numero massimo di punti (stimato se fosse un caso reale) per ospitare i punti ogni tot su device
-
-// più buffer per ospitare i punti sul device, non un solo buffer con offset (è più complesso da gestire e non cambia praticamente niente)
-// uso di cuda events per segnalare quando un buffer è stato elaborato e quindi può essere sovrascritto (un evento che segnala che il buffer è libero)
-// uso di ringbuffer per gestire l'uso dei buffer
-
 #include <stdio.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -40,10 +25,10 @@ do {                                                                    \
 
 
 void CUDART_CB send_socket(cudaStream_t stream, cudaError_t status, void *data) {
-    // 1. Casting del puntatore void* alla nostra struttura
+    // casting del puntatore void* alla nostra struttura
     struct CallbackOldData *args = (struct CallbackOldData *)data;
 
-    // 2. Controllo errori CUDA precedenti (buona norma)
+    // controllo errori cuda precedenti
     if (status != cudaSuccess) {
         printf("Errore stream CUDA prima della callback: %d\n", status);
         // Liberiamo la memoria allocata per gli argomenti prima di uscire
@@ -51,7 +36,7 @@ void CUDART_CB send_socket(cudaStream_t stream, cudaError_t status, void *data) 
         return;
     }
 
-    // 3. Estrazione dei dati (come richiesto: socket e buffer)
+    // estrazione dei dati
     int sock = args->socket_fd;
     char* buffer_to_send = (char*)args->buffer_ptr;
     int buf_id = args->buffer_id;
@@ -68,9 +53,8 @@ void CUDART_CB send_socket(cudaStream_t stream, cudaError_t status, void *data) 
 
     size_t total_sent = 0;
 
-    // 4. Ciclo di invio
+    // ciclo di invio
     while (total_sent < bytes_to_send) {
-        // Nota: usiamo 'sock' e il puntatore specifico passato nella struct
         ssize_t sent = send(sock, buffer_to_send + total_sent, bytes_to_send - total_sent, 0);
 
         if (sent < 0) {
@@ -81,8 +65,6 @@ void CUDART_CB send_socket(cudaStream_t stream, cudaError_t status, void *data) 
     }
 
     printf("Completato invio buffer %d. Totale: %zu bytes.\n", buf_id, total_sent);
-
-    // 5. IMPORTANTE: Liberare la memoria della struct allocata nel main/host
     free(args);
 }
 
@@ -108,13 +90,10 @@ __global__ void voxelization(Point* d_input, Voxel* d_output, int num_points) {
     int voxel_idx = curr_voxel_z * (NUM_VOXELS_X* NUM_VOXELS_Y) + curr_voxel_y * NUM_VOXELS_X + curr_voxel_x;
     
     atomicAdd(&d_output[voxel_idx].num_points, 1);
-
-    //TODO exctract active voxels qui??????
-
 }
 
 
-__global__ void extract_active_voxels(Voxel* d_voxels, Voxel* d_active_voxels, int* d_num_active_voxels) { // TODO warp divergence
+__global__ void extract_active_voxels(Voxel* d_voxels, Voxel* d_active_voxels, int* d_num_active_voxels) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= NUM_TOT_VOXELS) return;
 
@@ -365,8 +344,8 @@ int main(void) {
 
         // --- INIZIO BLOCCO CALLBACK ---
 
-        // Allocazione della struttura dati per passare gli argomenti alla callback
-        // Usiamo malloc perché la struct deve sopravvivere fino all'esecuzione della callback
+        // allocazione della struttura dati per passare gli argomenti alla callback
+        // usiamo malloc perché la struct deve sopravvivere fino all'esecuzione della callback
         struct CallbackOldData *cb_args = (struct CallbackOldData *)malloc(sizeof(struct CallbackOldData));
         
         // Riempimento dati (Socket, Puntatore al buffer specifico, Dimensione, ID)
@@ -375,8 +354,6 @@ int main(void) {
         cb_args->active_count = &(h_num_active_voxels[current_buffer]);
         cb_args->buffer_id = i;
 
-        // C. Aggiunta della callback allo stream d2h
-        // Quando lo stream arriva qui, eseguirà send_socket passando cb_args
         CHECK(cudaStreamAddCallback(d2h, send_socket, (void*)cb_args, 0));
 
         // --- FINE BLOCCO CALLBACK ---

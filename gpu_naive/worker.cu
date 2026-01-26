@@ -218,7 +218,6 @@ int main(void) {
 
         // 4. Ciclo di invio
         while (total_sent < bytes_to_send) {
-            // Nota: usiamo 'sock' e il puntatore specifico passato nella struct
             int sent = send(renderer_fd, (char*)h_active_voxels + total_sent, bytes_to_send - total_sent, 0);
 
             if (sent < 0) {
@@ -231,7 +230,7 @@ int main(void) {
         printf("Completato invio voxels. Totale: %d bytes.\n", total_sent);
 
 
-        //cleanUP
+        //cleanup
         CHECK(cudaFree(d_input));
         free(curr_points);
         

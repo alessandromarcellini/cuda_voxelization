@@ -153,8 +153,7 @@ int main(void) {
         }
 
         
-        // send voxel array "ripulito" to renderer
-
+        // send resulting voxel array to renderer
         active_count = 0;
 
         for (int i = 0; i < NUM_TOT_VOXELS; i++) {

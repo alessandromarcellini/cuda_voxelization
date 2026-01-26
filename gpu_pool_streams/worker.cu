@@ -1,31 +1,3 @@
-// N streams
-
-// uso memoria host pinned per trasfermenti + malloc iniziale
-
-// uso di cuda events per sincronizzare gli stream tra loro
-
-// allocazione del numero massimo di punti (stimato se fosse un caso reale) per ospitare i punti ogni tot su device
-
-// più buffer per ospitare i punti sul device, non un solo buffer con offset (è più complesso da gestire e non cambia praticamente niente)
-// uso di cuda events per segnalare quando un buffer è stato elaborato e quindi può essere sovrascritto (un evento che segnala che il buffer è libero)
-// uso di ringbuffer per gestire l'uso dei buffer
-
-
-/*
-
-cudaEventRecord(evento, streamA); <-- Piazzi il comando in coda.
-
-Cosa fa il Driver: "Ok, d'ora in poi l'evento si riferisce a questa nuova operazione futura. Stato attuale: PENDING (In Attesa)."
-
-cudaStreamWaitEvent(streamB, evento);
-
-Cosa fa il Driver: "Devo aspettare l'evento. Vedo che è stato appena schedulato (stato Pending).
-Blocco lo streamB finché la GPU non esegue il record."
-
-
-*/
-
-
 #include <thread>
 #include <queue>
 #include <iostream>
@@ -131,10 +103,10 @@ bool stop = false;
 
 void CUDART_CB callback(cudaStream_t stream, cudaError_t status, void *data) {
 
-    // Casting del puntatore void* alla nostra struttura
+    // casting del puntatore void* alla nostra struttura
     CallbackData *args = (CallbackData *)data;
 
-    // Controllo errori CUDA precedenti (buona norma)
+    // controllo errori CUDA precedenti
     if (status != cudaSuccess) {
         printf("Errore stream CUDA prima della callback: %d\n", status);
         // Liberiamo la memoria allocata per gli argomenti prima di uscire
@@ -164,7 +136,7 @@ void resetBuffer(CallbackData* buffer)
 
 // ---------------------------------------------------------------------------
 void send_voxels(int sock_fd, cudaEvent_t* output_was_sent_events, cudaStream_t signal) {
-    // enable bufferization for reordering
+    // bufferizzazione per riordinamento eventuale
     CallbackData buffers[NUM_BUFFERS];
     int next_buffer_to_send = 0;
 
@@ -360,7 +332,7 @@ int main(void) {
         CHECK(cudaEventCreateWithFlags(&h2d_done_events[i], cudaEventDisableTiming));
         CHECK(cudaEventCreateWithFlags(&output_was_sent_events[i], cudaEventDisableTiming));
 
-        // Inizializzazione eventi per il primo giro
+        // inizializzazione eventi per il primo giro
         CHECK(cudaEventRecord(h2d_done_events[i], streams[i]));
         CHECK(cudaEventRecord(output_was_sent_events[i], signal));
     }
@@ -431,8 +403,6 @@ int main(void) {
                             NUM_TOT_VOXELS * sizeof(Voxel),
                             cudaMemcpyDeviceToHost,
                             streams[current_stream]));
-
-        // Riempimento dati (Socket, Puntatore al buffer specifico, Dimensione, ID)
         
         CallbackData *cb_args = (CallbackData *)malloc(sizeof(CallbackData));
         cb_args->buffer_ptr = h_active_voxels[current_stream];
@@ -443,7 +413,7 @@ int main(void) {
         i++;
     }
     
-    // CLEANUP
+    // CLEANUP ---
 
     // shutdown thread sender
     {
