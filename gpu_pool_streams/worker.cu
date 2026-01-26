@@ -88,7 +88,7 @@ voxelization(Point* __restrict__ d_input, int* __restrict__ d_num_points_output,
     int warp_base = warp_id * TOT_READS_PER_WARP;
     int base_input_idx = warp_base + lane;
 
-    if (warp_base < num_points)
+    if (warp_base >= num_points)
         return;
 
     const int warp_size = 32;
