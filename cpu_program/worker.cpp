@@ -140,7 +140,7 @@ int main(void) {
         }
 
         
-        // send voxel array "ripulito" to renderer
+        // send active voxels to renderer
 
         active_count = 0;
 

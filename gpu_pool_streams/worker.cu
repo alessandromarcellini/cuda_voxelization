@@ -11,20 +11,6 @@
 // uso di ringbuffer per gestire l'uso dei buffer
 
 
-/*
-
-cudaEventRecord(evento, streamA); <-- Piazzi il comando in coda.
-
-Cosa fa il Driver: "Ok, d'ora in poi l'evento si riferisce a questa nuova operazione futura. Stato attuale: PENDING (In Attesa)."
-
-cudaStreamWaitEvent(streamB, evento);
-
-Cosa fa il Driver: "Devo aspettare l'evento. Vedo che è stato appena schedulato (stato Pending).
-Blocco lo streamB finché la GPU non esegue il record."
-
-
-*/
-
 
 #include <thread>
 #include <queue>
@@ -46,7 +32,6 @@ Blocco lo streamB finché la GPU non esegue il record."
 #ifndef __CUDACC__
 
 extern "C" {
-    // Definiamo i prototipi solo per l'IDE per togliere le righe rosse
     __device__ unsigned int __match_any_sync(unsigned int mask, unsigned int value);
     __device__ unsigned int __shfl_sync(unsigned int mask, int var, int srcLane, int width=32);
     __device__ unsigned int __shfl_up_sync(unsigned int mask, int var, unsigned int delta, int width=32);
@@ -104,7 +89,7 @@ voxelization(Point* __restrict__ d_input, int* __restrict__ d_num_points_output,
     // REGISTERS PREFETCH: Creiamo un buffer locale nei registri
     float4 local_points[ILP_FACTOR];
 
-    // 1. BURST LOAD (Prefetching)
+    // Prefetching ---------------------------------------------------------------------------------
     // Carichiamo TUTTI i dati necessari per questo thread prima di processarli.
     // Questo riempie la pipeline di memoria e riduce gli stalli durante il calcolo.
     // NOTA: Assumiamo che d_input sia "padded" nel main, quindi rimuoviamo il check `current_idx < num_points`
@@ -116,16 +101,14 @@ voxelization(Point* __restrict__ d_input, int* __restrict__ d_num_points_output,
         local_points[i] = ((float4*)d_input)[base_input_idx + i * warp_size];
     }
 
-    // 2. COMPUTE & AGGREGATE LOOP
+    // COMPUTE & AGGREGATE LOOP ---------------------------------------------------------------------------------
     #pragma unroll
     for (int i = 0; i < ILP_FACTOR; i++) {
 
-        // Math (ALU) - Ora la pipeline ALU è piena mentre la memoria lavorava prima
         int curr_voxel_x = __float2int_rd((local_points[i].x - r_min_x) * r_inv_dim);
         int curr_voxel_y = __float2int_rd((local_points[i].y - r_min_y) * r_inv_dim);
         int curr_voxel_z = __float2int_rd((local_points[i].z - r_min_z) * r_inv_dim);
 
-        // Controllo limiti (Branch predication friendly)
         bool inside = (curr_voxel_x >= 0 && curr_voxel_x < r_num_vox_x) &&
                       (curr_voxel_y >= 0 && curr_voxel_y < r_num_vox_y) &&
                       (curr_voxel_z >= 0 && curr_voxel_z < r_num_vox_z);
@@ -199,7 +182,7 @@ __global__ void extract_active_voxels(int* __restrict__ d_voxels, Voxel* __restr
     int warp_base = warp_id * TOT_READS_PER_WARP;
     int base_input_idx = warp_base + lane;
 
-    // --- 1. LETTURA (Invariata) ---
+    // LETTURA ---------------------------------------------------------------------------------
     // Usiamo variabili locali per evitare accessi spuri se siamo fuori range
     int voxel_num_points_array[ILP_FACTOR];
     int active_mask[ILP_FACTOR] = {0};
@@ -221,7 +204,7 @@ __global__ void extract_active_voxels(int* __restrict__ d_voxels, Voxel* __restr
         }
     }
 
-    // --- 2. AGGREGAZIONE WARP ADD ---
+    // AGGREGAZIONE WARP ADD ---------------------------------------------------------------------------------
     
     int warp_total_count = 0;
     // Calcola dove scrivere RELATIVAMENTE all'inizio del blocco del warp
@@ -244,7 +227,7 @@ __global__ void extract_active_voxels(int* __restrict__ d_voxels, Voxel* __restr
     int current_out_idx = warp_global_start_idx + my_warp_offset;
 
 
-    // --- 3. SCRITTURA COALESCED ---
+    // SCRITTURA COALESCED ---------------------------------------------------------------------------------
     if (is_valid_thread && local_active_count > 0) {
         #pragma unroll
         for (int i = 0; i < ILP_FACTOR; i++) {
