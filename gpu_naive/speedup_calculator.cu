@@ -505,7 +505,6 @@ int main(void) {
 
     // inserisci un evento start nello stream, fai eseguire tutto normalmente, inserisci un evento stop nello stream, sincronizza a stop e calcola elapsed time
     // Timer CUDA
-    cudaSetDeviceFlags(cudaDeviceMapHost);
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
@@ -529,9 +528,9 @@ int main(void) {
 
     // memoria zero-copy per il numero di voxel attivi
     // Alloca memoria host pinned e mappata
-    cudaHostAlloc((void**)&h_num_active_voxels, sizeof(int), cudaHostAllocMapped);
+    h_num_active_voxels = (int*)malloc(sizeof(int));
     // Ottieni il puntatore device alla stessa memoria
-    cudaHostGetDevicePointer((void**)&d_num_active_voxels, h_num_active_voxels, 0);
+    cudaMalloc(&d_num_active_voxels, sizeof(int));
 
     for(int l = 0; l < NUM_TESTS; l++) {
         printf("\t[GPU] TEST NUMBER %d\n", l +1);
@@ -561,11 +560,12 @@ int main(void) {
             voxelization<<<gridVox, blockVox>>>(d_input, d_voxels_num_points_output, num_points);
             
             // LANCIO KERNEL active_voxels
-            (*h_num_active_voxels) = 0;
+            cudaMemset(d_num_active_voxels, 0, sizeof(int));
             num_chunks = (NUM_TOT_VOXELS + ILP_FACTOR - 1) / ILP_FACTOR;
             dim3 blockActiveVoxel(THREAD_BLOCK_SIZE_1D);
             dim3 gridActiveVoxel((num_chunks + THREAD_BLOCK_SIZE_1D - 1) / THREAD_BLOCK_SIZE_1D);
             extract_active_voxels<<<gridActiveVoxel, blockActiveVoxel>>>(d_voxels_num_points_output, d_active_voxels, d_num_active_voxels);
+            cudaMemcpy(h_num_active_voxels, d_num_active_voxels, sizeof(int), cudaMemcpyDeviceToHost);
 
             // COPIA D2H risultati
             CHECK(cudaMemcpy(h_active_voxels, d_active_voxels, (*h_num_active_voxels) * sizeof(Voxel), cudaMemcpyDeviceToHost));            
@@ -588,7 +588,8 @@ int main(void) {
 
 
     CHECK(cudaFreeHost(curr_points));
-    CHECK(cudaFreeHost(h_num_active_voxels));
+    free(h_num_active_voxels);
+    cudaFree(d_num_active_voxels);
     CHECK(cudaFree(d_input));
     CHECK(cudaFree(d_voxels_num_points_output));
     CHECK(cudaFree(d_active_voxels));
